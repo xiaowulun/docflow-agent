@@ -64,6 +64,18 @@ export interface ChatMessage {
   created_at?: string;
 }
 
+export interface SessionContent {
+  id: string;
+  title: string;
+  content: string;
+  content_type: string;
+  output_format: string;
+  is_saved: boolean;
+  file_path?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SessionDetail {
   id: string;
   title: string;
@@ -71,6 +83,7 @@ export interface SessionDetail {
   model: string;
   messages: ChatMessage[];
   tools: ToolInfo[];
+  contents: SessionContent[];
   createdAt: string;
   updatedAt: string;
 }

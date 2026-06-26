@@ -19,6 +19,8 @@ class SessionStatus(str, Enum):
     IDLE = "idle"  # 空闲，等待用户输入
     THINKING = "thinking"  # 正在调用 LLM 思考
     CALLING_TOOL = "calling_tool"  # 正在执行工具
+    AWAITING_CONFIRMATION = "awaiting_confirmation"  # 已生成草稿，等待确认保存
+    SAVING = "saving"  # 正在保存输出文件
     ERROR = "error"  # 出错
 
 
