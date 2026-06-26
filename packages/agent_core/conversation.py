@@ -80,8 +80,11 @@ class ConversationAgent:
         #    最多循环 5 次，防止工具调用死循环
         max_iterations = 5
         final_reply = ""
+<<<<<<< HEAD
         changed_content = False
         saved_content = False
+=======
+>>>>>>> origin/main
 
         for _ in range(max_iterations):
             # 构造 OpenAI 格式的 messages
@@ -142,9 +145,12 @@ class ConversationAgent:
                     if tool_func is None:
                         tool_result = {"error": f"未知工具: {tool_name}"}
                     else:
+<<<<<<< HEAD
                         if tool_name == "save_content":
                             session.status = SessionStatus.SAVING
                             session.touch()
+=======
+>>>>>>> origin/main
                         token = set_current_session_id(session.id)
                         try:
                             tool_result = tool_func(**arguments)
@@ -153,11 +159,14 @@ class ConversationAgent:
                         finally:
                             reset_current_session_id(token)
 
+<<<<<<< HEAD
                     if tool_name in {"write_content", "edit_content"} and "error" not in tool_result:
                         changed_content = True
                     if tool_name == "save_content" and "error" not in tool_result:
                         saved_content = True
 
+=======
+>>>>>>> origin/main
                     # 工具结果作为 tool 消息入历史
                     session.messages.append(
                         Message(
@@ -181,10 +190,14 @@ class ConversationAgent:
             break
 
         # 4. 完成
+<<<<<<< HEAD
         if changed_content and not saved_content:
             session.status = SessionStatus.AWAITING_CONFIRMATION
         else:
             session.status = SessionStatus.IDLE
+=======
+        session.status = SessionStatus.IDLE
+>>>>>>> origin/main
         session.touch()
 
         return final_reply
@@ -201,12 +214,19 @@ class ConversationAgent:
                 "role": "system",
                 "content": (
                     "你是一个极简的 pi agent。"
+<<<<<<< HEAD
                     "你能聊天、维护上下文，并通过工具管理当前会话内的内容草稿。"
                     "当用户要写新内容时，先生成完整正文，再调用 write_content 写入草稿。"
                     "当用户要查看已有内容时，优先使用 list_contents 或 read_content。"
                     "当用户要修改、润色、扩写或重写已有内容时，先读取原文，再生成更新后的完整正文，并调用 edit_content。"
                     "写完或改完后，不要自动保存文件。你必须先把正文展示给用户，然后另起一段询问是否需要保存，并说明默认保存为 md。"
                     "只有用户明确同意保存时，才能调用 save_content；如果用户没有指定格式，默认使用 md。"
+=======
+                    "你能聊天、维护上下文，并通过工具管理当前会话内的内容对象。"
+                    "当用户要写新内容时，先产出完整正文，再调用 create_document 保存。"
+                    "当用户要查看已有内容时，优先使用 list_documents 或 read_document。"
+                    "当用户要修改、润色、扩写或重写已有内容时，先读取原文，再生成更新后的完整正文，并调用 update_document。"
+>>>>>>> origin/main
                     "除非用户明确要求列出内部细节，否则用自然中文直接回答。"
                 ),
             }

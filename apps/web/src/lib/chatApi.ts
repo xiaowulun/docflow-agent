@@ -64,6 +64,7 @@ export interface ChatMessage {
   created_at?: string;
 }
 
+<<<<<<< HEAD
 export interface SessionContent {
   id: string;
   title: string;
@@ -76,6 +77,8 @@ export interface SessionContent {
   updatedAt: string;
 }
 
+=======
+>>>>>>> origin/main
 export interface SessionDetail {
   id: string;
   title: string;
@@ -83,7 +86,10 @@ export interface SessionDetail {
   model: string;
   messages: ChatMessage[];
   tools: ToolInfo[];
+<<<<<<< HEAD
   contents: SessionContent[];
+=======
+>>>>>>> origin/main
   createdAt: string;
   updatedAt: string;
 }

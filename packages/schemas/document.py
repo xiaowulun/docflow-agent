@@ -12,16 +12,23 @@ from pydantic import BaseModel, Field
 
 
 class Document(BaseModel):
+<<<<<<< HEAD
     """会话内的通用内容对象/草稿"""
+=======
+    """会话内的通用内容对象"""
+>>>>>>> origin/main
 
     id: str = Field(default_factory=lambda: uuid4().hex[:12])
     session_id: str
     title: str
     content: str
     content_type: str = "text"
+<<<<<<< HEAD
     output_format: str = "md"
     is_saved: bool = False
     file_path: str | None = None
+=======
+>>>>>>> origin/main
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 

@@ -1,6 +1,7 @@
 """
 pi agent 内置工具集
 
+<<<<<<< HEAD
 第一版聚焦会话内草稿管理与显式保存。
 生成和编辑先写入草稿，只有在用户确认后才调用保存工具落盘。
 """
@@ -11,6 +12,15 @@ import re
 
 from apps.api.app.services.document_store import get_document_store
 from config import settings
+=======
+第一版聚焦通用内容对象，不绑定 Office 或编程场景。
+工具负责读写持久化，内容生成与改写由 LLM 完成。
+"""
+
+from contextvars import ContextVar, Token
+
+from apps.api.app.services.document_store import get_document_store
+>>>>>>> origin/main
 from packages.schemas.document import Document
 
 _CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
@@ -18,11 +28,19 @@ _CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
 )
 
 
+<<<<<<< HEAD
 list_contents_schema = {
     "type": "function",
     "function": {
         "name": "list_contents",
         "description": "列出当前会话里的所有草稿和已保存内容。当用户提到刚才那份、已有内容或内容列表时使用。",
+=======
+list_documents_schema = {
+    "type": "function",
+    "function": {
+        "name": "list_documents",
+        "description": "列出当前会话里的所有内容对象。当用户提到刚才那份、已有文档、当前内容列表时使用。",
+>>>>>>> origin/main
         "parameters": {
             "type": "object",
             "properties": {},
@@ -32,6 +50,7 @@ list_contents_schema = {
 }
 
 
+<<<<<<< HEAD
 read_content_schema = {
     "type": "function",
     "function": {
@@ -46,26 +65,58 @@ read_content_schema = {
                 }
             },
             "required": ["content_id"],
+=======
+read_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "read_document",
+        "description": "读取一份已有内容对象的完整内容和元信息。当需要查看、引用或修改已有内容时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "要读取的文档 ID",
+                }
+            },
+            "required": ["document_id"],
+>>>>>>> origin/main
         },
     },
 }
 
 
+<<<<<<< HEAD
 write_content_schema = {
     "type": "function",
     "function": {
         "name": "write_content",
         "description": "把一份新生成的正文写入当前会话草稿。生成新内容后先调用它保存草稿，但不要自动保存成文件。",
+=======
+create_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "create_document",
+        "description": "创建一份新的内容对象。当你已经生成好用户需要的正文后，用它保存内容。",
+>>>>>>> origin/main
         "parameters": {
             "type": "object",
             "properties": {
                 "title": {
                     "type": "string",
+<<<<<<< HEAD
                     "description": "内容标题",
                 },
                 "content": {
                     "type": "string",
                     "description": "完整正文内容",
+=======
+                    "description": "文档标题",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "要保存的正文内容",
+>>>>>>> origin/main
                 },
                 "content_type": {
                     "type": "string",
@@ -78,6 +129,7 @@ write_content_schema = {
 }
 
 
+<<<<<<< HEAD
 edit_content_schema = {
     "type": "function",
     "function": {
@@ -89,6 +141,19 @@ edit_content_schema = {
                 "content_id": {
                     "type": "string",
                     "description": "要更新的内容 ID",
+=======
+update_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "update_document",
+        "description": "更新一份已有内容对象，相当于编辑和覆写。当用户要求修改、润色、扩写或重写已有内容时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "要更新的文档 ID",
+>>>>>>> origin/main
                 },
                 "content": {
                     "type": "string",
@@ -99,6 +164,7 @@ edit_content_schema = {
                     "description": "可选，更新后的标题",
                 },
             },
+<<<<<<< HEAD
             "required": ["content_id", "content"],
         },
     },
@@ -127,6 +193,9 @@ save_content_schema = {
                 },
             },
             "required": ["content_id"],
+=======
+            "required": ["document_id", "content"],
+>>>>>>> origin/main
         },
     },
 }
@@ -149,13 +218,18 @@ def _require_session_id() -> str:
     return session_id
 
 
+<<<<<<< HEAD
 def list_contents() -> dict:
+=======
+def list_documents() -> dict:
+>>>>>>> origin/main
     """列出当前会话下的所有内容对象"""
     session_id = _require_session_id()
     store = get_document_store()
     documents = store.list_by_session(session_id)
     return {
         "count": len(documents),
+<<<<<<< HEAD
         "contents": [_serialize_content_summary(doc) for doc in documents],
     }
 
@@ -170,20 +244,62 @@ def read_content(content_id: str) -> dict:
 
 
 def write_content(
+=======
+        "documents": [
+            {
+                "id": doc.id,
+                "title": doc.title,
+                "content_type": doc.content_type,
+                "updated_at": doc.updated_at.isoformat(),
+            }
+            for doc in documents
+        ],
+    }
+
+
+def read_document(document_id: str) -> dict:
+    """读取指定内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    document = store.get(document_id)
+    if document is None or document.session_id != session_id:
+        return {"error": f"文档不存在: {document_id}"}
+
+    return {
+        "id": document.id,
+        "title": document.title,
+        "content": document.content,
+        "content_type": document.content_type,
+        "created_at": document.created_at.isoformat(),
+        "updated_at": document.updated_at.isoformat(),
+    }
+
+
+def create_document(
+>>>>>>> origin/main
     title: str,
     content: str,
     content_type: str = "text",
 ) -> dict:
+<<<<<<< HEAD
     """创建新的会话草稿"""
+=======
+    """创建新的内容对象"""
+>>>>>>> origin/main
     session_id = _require_session_id()
     store = get_document_store()
     document = Document(
         session_id=session_id,
+<<<<<<< HEAD
         title=title.strip() or "未命名内容",
+=======
+        title=title.strip() or "未命名文档",
+>>>>>>> origin/main
         content=content,
         content_type=content_type or "text",
     )
     store.create(document)
+<<<<<<< HEAD
     detail = _serialize_content_detail(document)
     detail["message"] = "草稿已写入"
     return detail
@@ -238,10 +354,37 @@ def save_content(
     )
     if updated is None:
         return {"error": f"保存状态更新失败: {content_id}"}
+=======
+    return {
+        "id": document.id,
+        "title": document.title,
+        "content": document.content,
+        "content_type": document.content_type,
+        "message": "文档已创建",
+    }
+
+
+def update_document(
+    document_id: str,
+    content: str,
+    title: str | None = None,
+) -> dict:
+    """更新已有内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    document = store.get(document_id)
+    if document is None or document.session_id != session_id:
+        return {"error": f"文档不存在: {document_id}"}
+
+    updated = store.update(document_id, content=content, title=title)
+    if updated is None:
+        return {"error": f"文档更新失败: {document_id}"}
+>>>>>>> origin/main
 
     return {
         "id": updated.id,
         "title": updated.title,
+<<<<<<< HEAD
         "format": fmt,
         "file_path": updated.file_path,
         "message": f"内容已保存为 {fmt} 文件",
@@ -300,15 +443,35 @@ BUILTIN_TOOLS = [
     write_content_schema,
     edit_content_schema,
     save_content_schema,
+=======
+        "content": updated.content,
+        "content_type": updated.content_type,
+        "message": "文档已更新",
+    }
+
+
+BUILTIN_TOOLS = [
+    list_documents_schema,
+    read_document_schema,
+    create_document_schema,
+    update_document_schema,
+>>>>>>> origin/main
 ]
 
 
 BUILTIN_TOOL_FUNCS = {
+<<<<<<< HEAD
     "list_contents": list_contents,
     "read_content": read_content,
     "write_content": write_content,
     "edit_content": edit_content,
     "save_content": save_content,
+=======
+    "list_documents": list_documents,
+    "read_document": read_document,
+    "create_document": create_document,
+    "update_document": update_document,
+>>>>>>> origin/main
 }
 
 

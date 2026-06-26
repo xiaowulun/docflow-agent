@@ -28,10 +28,13 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
         return "text-amber-600 bg-amber-50";
       case "calling_tool":
         return "text-blue-600 bg-blue-50";
+<<<<<<< HEAD
       case "awaiting_confirmation":
         return "text-violet-600 bg-violet-50";
       case "saving":
         return "text-emerald-600 bg-emerald-50";
+=======
+>>>>>>> origin/main
       case "error":
         return "text-red-600 bg-red-50";
       default:
@@ -73,6 +76,7 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
           <Info label="创建时间" value={formatTime(session.createdAt)} />
           <Info label="更新时间" value={formatTime(session.updatedAt)} />
 
+<<<<<<< HEAD
           <Info
             label="内容数"
             value={String(session.contents?.length ?? 0)}
@@ -84,6 +88,8 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
             </div>
           )}
 
+=======
+>>>>>>> origin/main
           {/* 可用工具 */}
           <div>
             <p className="mb-1 text-xs text-gray-500">可用工具</p>
@@ -102,6 +108,7 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
               )}
             </div>
           </div>
+<<<<<<< HEAD
 
           <div>
             <p className="mb-1 text-xs text-gray-500">当前内容</p>
@@ -133,6 +140,8 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
               )}
             </div>
           </div>
+=======
+>>>>>>> origin/main
         </div>
       )}
     </aside>
