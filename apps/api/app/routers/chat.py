@@ -7,6 +7,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from apps.api.app.services.document_store import get_document_store
 from apps.api.app.services.session_store import get_session_store
 from config import settings
 from packages.agent_core.conversation import ConversationAgent
@@ -139,6 +140,8 @@ async def send_message(session_id: str, req: SendMessageRequest):
 
 def _session_detail(session: Session) -> dict:
     """把 Session 序列化成前端需要的结构"""
+    document_store = get_document_store()
+    documents = document_store.list_by_session(session.id)
     return {
         "id": session.id,
         "title": session.title,
@@ -146,6 +149,17 @@ def _session_detail(session: Session) -> dict:
         "model": session.model,
         "messages": [m.model_dump() for m in session.messages],
         "tools": [t.model_dump() for t in session.tools],
+        "documents": [
+            {
+                "id": doc.id,
+                "title": doc.title,
+                "content": doc.content,
+                "content_type": doc.content_type,
+                "createdAt": doc.created_at.isoformat(),
+                "updatedAt": doc.updated_at.isoformat(),
+            }
+            for doc in documents
+        ],
         "createdAt": session.created_at.isoformat(),
         "updatedAt": session.updated_at.isoformat(),
     }

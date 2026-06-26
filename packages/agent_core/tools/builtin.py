@@ -1,133 +1,223 @@
 """
-内置工具集
+pi agent 内置工具集
 
-每个工具定义两部分：
-1. OpenAI function calling 格式的 schema（type: function）
-2. Python 执行函数
-
-这些工具是确定性的、无副作用的，用来验证 agent 的 tool calling 闭环。
-后续挂文件工具（read_docx 等）时，在下面按相同格式追加即可。
+第一版聚焦通用内容对象，不绑定 Office 或编程场景。
+工具负责读写持久化，内容生成与改写由 LLM 完成。
 """
 
-from datetime import datetime
+from contextvars import ContextVar, Token
 
-# ---------------------------------------------------------------------------
-# 工具 1：获取当前时间
-# ---------------------------------------------------------------------------
+from apps.api.app.services.document_store import get_document_store
+from packages.schemas.document import Document
 
-get_current_time_schema = {
+_CURRENT_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "current_session_id", default=None
+)
+
+
+list_documents_schema = {
     "type": "function",
     "function": {
-        "name": "get_current_time",
-        "description": "获取当前的日期和时间。当用户询问现在几点、今天日期时使用。",
+        "name": "list_documents",
+        "description": "列出当前会话里的所有内容对象。当用户提到刚才那份、已有文档、当前内容列表时使用。",
         "parameters": {
             "type": "object",
-            "properties": {
-                "timezone": {
-                    "type": "string",
-                    "description": "可选，时区，默认本地时间",
-                }
-            },
+            "properties": {},
             "required": [],
         },
     },
 }
 
 
-def get_current_time(timezone: str = "local") -> dict:
-    """获取当前时间"""
-    now = datetime.now()
+read_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "read_document",
+        "description": "读取一份已有内容对象的完整内容和元信息。当需要查看、引用或修改已有内容时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "要读取的文档 ID",
+                }
+            },
+            "required": ["document_id"],
+        },
+    },
+}
+
+
+create_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "create_document",
+        "description": "创建一份新的内容对象。当你已经生成好用户需要的正文后，用它保存内容。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "文档标题",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "要保存的正文内容",
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "内容类型，例如 text、note、summary、draft",
+                },
+            },
+            "required": ["title", "content"],
+        },
+    },
+}
+
+
+update_document_schema = {
+    "type": "function",
+    "function": {
+        "name": "update_document",
+        "description": "更新一份已有内容对象，相当于编辑和覆写。当用户要求修改、润色、扩写或重写已有内容时使用。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "要更新的文档 ID",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "更新后的完整正文",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "可选，更新后的标题",
+                },
+            },
+            "required": ["document_id", "content"],
+        },
+    },
+}
+
+
+def set_current_session_id(session_id: str) -> Token:
+    """设置当前工具调用的会话上下文"""
+    return _CURRENT_SESSION_ID.set(session_id)
+
+
+def reset_current_session_id(token: Token) -> None:
+    """重置当前工具调用的会话上下文"""
+    _CURRENT_SESSION_ID.reset(token)
+
+
+def _require_session_id() -> str:
+    session_id = _CURRENT_SESSION_ID.get()
+    if not session_id:
+        raise RuntimeError("当前工具调用缺少会话上下文")
+    return session_id
+
+
+def list_documents() -> dict:
+    """列出当前会话下的所有内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    documents = store.list_by_session(session_id)
     return {
-        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "weekday": ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][now.weekday()],
-        "timezone": timezone,
+        "count": len(documents),
+        "documents": [
+            {
+                "id": doc.id,
+                "title": doc.title,
+                "content_type": doc.content_type,
+                "updated_at": doc.updated_at.isoformat(),
+            }
+            for doc in documents
+        ],
     }
 
 
-# ---------------------------------------------------------------------------
-# 工具 2：计算器
-# ---------------------------------------------------------------------------
+def read_document(document_id: str) -> dict:
+    """读取指定内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    document = store.get(document_id)
+    if document is None or document.session_id != session_id:
+        return {"error": f"文档不存在: {document_id}"}
 
-calculator_schema = {
-    "type": "function",
-    "function": {
-        "name": "calculator",
-        "description": "进行四则运算。当用户需要数学计算时使用，不要自己心算。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "expression": {
-                    "type": "string",
-                    "description": "数学表达式，例如 '3 + 5 * 2' 或 '(10 - 3) / 2'",
-                }
-            },
-            "required": ["expression"],
-        },
-    },
-}
+    return {
+        "id": document.id,
+        "title": document.title,
+        "content": document.content,
+        "content_type": document.content_type,
+        "created_at": document.created_at.isoformat(),
+        "updated_at": document.updated_at.isoformat(),
+    }
 
 
-def calculator(expression: str) -> dict:
-    """安全计算数学表达式
-
-    注意：这里用受限的 eval，只允许数字和运算符。
-    真实生产环境应换成 ast 解析，这里为示例简化。
-    """
-    # 只允许数字、运算符、空格、小括号、小数点
-    allowed = set("0123456789+-*/.() ")
-    if not all(c in allowed for c in expression):
-        return {"error": "表达式包含非法字符", "expression": expression}
-    try:
-        result = eval(expression, {"__builtins__": {}}, {})
-        return {"expression": expression, "result": result}
-    except Exception as e:
-        return {"error": f"计算失败: {e}", "expression": expression}
-
-
-# ---------------------------------------------------------------------------
-# 工具 3：字符串长度
-# ---------------------------------------------------------------------------
-
-string_length_schema = {
-    "type": "function",
-    "function": {
-        "name": "string_length",
-        "description": "计算字符串的字符数。当用户问某个字符串有多长时使用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "要计算长度的字符串",
-                }
-            },
-            "required": ["text"],
-        },
-    },
-}
+def create_document(
+    title: str,
+    content: str,
+    content_type: str = "text",
+) -> dict:
+    """创建新的内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    document = Document(
+        session_id=session_id,
+        title=title.strip() or "未命名文档",
+        content=content,
+        content_type=content_type or "text",
+    )
+    store.create(document)
+    return {
+        "id": document.id,
+        "title": document.title,
+        "content": document.content,
+        "content_type": document.content_type,
+        "message": "文档已创建",
+    }
 
 
-def string_length(text: str) -> dict:
-    """计算字符串长度"""
-    return {"text": text, "length": len(text)}
+def update_document(
+    document_id: str,
+    content: str,
+    title: str | None = None,
+) -> dict:
+    """更新已有内容对象"""
+    session_id = _require_session_id()
+    store = get_document_store()
+    document = store.get(document_id)
+    if document is None or document.session_id != session_id:
+        return {"error": f"文档不存在: {document_id}"}
+
+    updated = store.update(document_id, content=content, title=title)
+    if updated is None:
+        return {"error": f"文档更新失败: {document_id}"}
+
+    return {
+        "id": updated.id,
+        "title": updated.title,
+        "content": updated.content,
+        "content_type": updated.content_type,
+        "message": "文档已更新",
+    }
 
 
-# ---------------------------------------------------------------------------
-# 汇总注册
-# ---------------------------------------------------------------------------
-
-# 所有工具的 schema（传给 LLM 的 tools 参数）
 BUILTIN_TOOLS = [
-    get_current_time_schema,
-    calculator_schema,
-    string_length_schema,
+    list_documents_schema,
+    read_document_schema,
+    create_document_schema,
+    update_document_schema,
 ]
 
-# 工具名 -> 执行函数
+
 BUILTIN_TOOL_FUNCS = {
-    "get_current_time": get_current_time,
-    "calculator": calculator,
-    "string_length": string_length,
+    "list_documents": list_documents,
+    "read_document": read_document,
+    "create_document": create_document,
+    "update_document": update_document,
 }
 
 

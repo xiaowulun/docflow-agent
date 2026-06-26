@@ -22,6 +22,10 @@ from packages.schemas.conversation import (
     ToolInfo,
 )
 from packages.agent_core.tools import BUILTIN_TOOLS, get_tool_func
+from packages.agent_core.tools.builtin import (
+    reset_current_session_id,
+    set_current_session_id,
+)
 
 
 class ConversationAgent:
@@ -96,8 +100,6 @@ class ConversationAgent:
             if assistant_msg.tool_calls:
                 # 记录 assistant 的工具调用意图
                 tool_call_infos = []
-                # 构建 OpenAI 格式需要保留的 tool_calls 原始结构
-                raw_tool_calls = []
 
                 for tc in assistant_msg.tool_calls:
                     tool_name = tc.function.name
@@ -113,7 +115,6 @@ class ConversationAgent:
                             id=tc.id, name=tool_name, arguments=arguments
                         )
                     )
-                    raw_tool_calls.append(tc)
 
                 session.messages.append(
                     Message(
@@ -139,10 +140,13 @@ class ConversationAgent:
                     if tool_func is None:
                         tool_result = {"error": f"未知工具: {tool_name}"}
                     else:
+                        token = set_current_session_id(session.id)
                         try:
                             tool_result = tool_func(**arguments)
                         except Exception as e:
                             tool_result = {"error": f"工具执行失败: {e}"}
+                        finally:
+                            reset_current_session_id(token)
 
                     # 工具结果作为 tool 消息入历史
                     session.messages.append(
@@ -183,9 +187,12 @@ class ConversationAgent:
             {
                 "role": "system",
                 "content": (
-                    "你是一个有用的助手。你可以调用工具来帮助用户回答问题。"
-                    "如果需要当前时间、数学计算或字符串长度，请使用相应工具，"
-                    "不要自己猜测。回答用中文。"
+                    "你是一个极简的 pi agent。"
+                    "你能聊天、维护上下文，并通过工具管理当前会话内的内容对象。"
+                    "当用户要写新内容时，先产出完整正文，再调用 create_document 保存。"
+                    "当用户要查看已有内容时，优先使用 list_documents 或 read_document。"
+                    "当用户要修改、润色、扩写或重写已有内容时，先读取原文，再生成更新后的完整正文，并调用 update_document。"
+                    "除非用户明确要求列出内部细节，否则用自然中文直接回答。"
                 ),
             }
         ]
