@@ -52,6 +52,26 @@ class DocumentStore:
             document.touch()
             return document
 
+<<<<<<< HEAD
+    def mark_saved(
+        self,
+        document_id: str,
+        *,
+        output_format: str,
+        file_path: str,
+    ) -> Document | None:
+        with self._lock:
+            document = self._documents.get(document_id)
+            if document is None:
+                return None
+            document.output_format = output_format
+            document.file_path = file_path
+            document.is_saved = True
+            document.touch()
+            return document
+
+=======
+>>>>>>> origin/main
 
 _store: DocumentStore | None = None
 

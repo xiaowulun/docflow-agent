@@ -141,7 +141,11 @@ async def send_message(session_id: str, req: SendMessageRequest):
 def _session_detail(session: Session) -> dict:
     """把 Session 序列化成前端需要的结构"""
     document_store = get_document_store()
+<<<<<<< HEAD
+    contents = document_store.list_by_session(session.id)
+=======
     documents = document_store.list_by_session(session.id)
+>>>>>>> origin/main
     return {
         "id": session.id,
         "title": session.title,
@@ -149,6 +153,21 @@ def _session_detail(session: Session) -> dict:
         "model": session.model,
         "messages": [m.model_dump() for m in session.messages],
         "tools": [t.model_dump() for t in session.tools],
+<<<<<<< HEAD
+        "contents": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "content": item.content,
+                "content_type": item.content_type,
+                "output_format": item.output_format,
+                "is_saved": item.is_saved,
+                "file_path": item.file_path,
+                "createdAt": item.created_at.isoformat(),
+                "updatedAt": item.updated_at.isoformat(),
+            }
+            for item in contents
+=======
         "documents": [
             {
                 "id": doc.id,
@@ -159,6 +178,7 @@ def _session_detail(session: Session) -> dict:
                 "updatedAt": doc.updated_at.isoformat(),
             }
             for doc in documents
+>>>>>>> origin/main
         ],
         "createdAt": session.created_at.isoformat(),
         "updatedAt": session.updated_at.isoformat(),

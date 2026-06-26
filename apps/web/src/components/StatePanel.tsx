@@ -28,6 +28,13 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
         return "text-amber-600 bg-amber-50";
       case "calling_tool":
         return "text-blue-600 bg-blue-50";
+<<<<<<< HEAD
+      case "awaiting_confirmation":
+        return "text-violet-600 bg-violet-50";
+      case "saving":
+        return "text-emerald-600 bg-emerald-50";
+=======
+>>>>>>> origin/main
       case "error":
         return "text-red-600 bg-red-50";
       default:
@@ -69,6 +76,20 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
           <Info label="创建时间" value={formatTime(session.createdAt)} />
           <Info label="更新时间" value={formatTime(session.updatedAt)} />
 
+<<<<<<< HEAD
+          <Info
+            label="内容数"
+            value={String(session.contents?.length ?? 0)}
+          />
+
+          {session.status === "awaiting_confirmation" && (
+            <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
+              当前有草稿待确认，用户可以继续要求保存，默认格式为 md。
+            </div>
+          )}
+
+=======
+>>>>>>> origin/main
           {/* 可用工具 */}
           <div>
             <p className="mb-1 text-xs text-gray-500">可用工具</p>
@@ -87,6 +108,40 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
               )}
             </div>
           </div>
+<<<<<<< HEAD
+
+          <div>
+            <p className="mb-1 text-xs text-gray-500">当前内容</p>
+            <div className="space-y-2">
+              {(session.contents ?? []).map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded border border-gray-200 bg-gray-50 px-2 py-2 text-xs text-gray-700"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-800">{item.title}</span>
+                    <span
+                      className={`rounded px-1.5 py-0.5 ${
+                        item.is_saved
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-amber-100 text-amber-700"
+                      }`}
+                    >
+                      {item.is_saved ? `已保存 ${item.output_format}` : "草稿"}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-gray-600">
+                    {item.content}
+                  </p>
+                </div>
+              ))}
+              {(session.contents ?? []).length === 0 && (
+                <span className="text-xs text-gray-400">暂无内容</span>
+              )}
+            </div>
+          </div>
+=======
+>>>>>>> origin/main
         </div>
       )}
     </aside>
