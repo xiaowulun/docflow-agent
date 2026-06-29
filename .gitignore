@@ -21,6 +21,14 @@ storage/files/uploads/*
 storage/files/outputs/*
 !*/.gitkeep
 
+# 测试文档
+*.docx
+*.pptx
+!tests/**/*
+
+# uv 锁文件
+uv.lock
+
 # Node / Next.js
 node_modules/
 .next/

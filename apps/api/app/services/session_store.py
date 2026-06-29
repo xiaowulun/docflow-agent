@@ -1,29 +1,50 @@
 """
 Session Store - 会话存储
 
-内存存储会话数据。接口设计成仓储模式，
-后续切换到 SQLite（复用 config.sqlite_path）只需替换实现，不改调用方。
-
-后续 SQLite 接入点：
-- create/get/list/delete/rename 的方法签名保持不变
-- 内部把 self._sessions: dict 换成 SQLAlchemy 的 session 查询即可
+JSON 文件持久化存储。每个会话一个 JSON 文件，
+重启不丢失数据。
 """
 
+import json
 import threading
+from pathlib import Path
 
 from packages.schemas.conversation import Session
 
 
+_SESSIONS_DIR = Path("storage/sessions")
+
+
 class SessionStore:
-    """会话存储（线程安全的内存实现）"""
+    """会话存储（JSON 文件持久化，线程安全）"""
 
     def __init__(self):
+        _SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
+        self._load_all()
+
+    def _session_file(self, session_id: str) -> Path:
+        return _SESSIONS_DIR / f"{session_id}.json"
+
+    def _load_all(self):
+        for f in _SESSIONS_DIR.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                session = Session(**data)
+                self._sessions[session.id] = session
+            except Exception:
+                pass
+
+    def _save(self, session: Session):
+        self._session_file(session.id).write_text(
+            session.model_dump_json(), encoding="utf-8"
+        )
 
     def create(self, session: Session) -> Session:
         with self._lock:
             self._sessions[session.id] = session
+            self._save(session)
         return session
 
     def get(self, session_id: str) -> Session | None:
@@ -31,7 +52,6 @@ class SessionStore:
             return self._sessions.get(session_id)
 
     def list_all(self) -> list[Session]:
-        """按更新时间倒序返回"""
         with self._lock:
             sessions = list(self._sessions.values())
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
@@ -39,14 +59,17 @@ class SessionStore:
 
     def delete(self, session_id: str) -> bool:
         with self._lock:
-            return self._sessions.pop(session_id, None) is not None
+            if self._sessions.pop(session_id, None) is not None:
+                self._session_file(session_id).unlink(missing_ok=True)
+                return True
+            return False
 
     def update(self, session_id: str) -> Session | None:
-        """更新时间戳并返回（已有 session 修改后调用）"""
         with self._lock:
             session = self._sessions.get(session_id)
             if session:
                 session.touch()
+                self._save(session)
             return session
 
 
@@ -55,7 +78,6 @@ _store: SessionStore | None = None
 
 
 def get_session_store() -> SessionStore:
-    """获取全局 SessionStore 单例"""
     global _store
     if _store is None:
         _store = SessionStore()

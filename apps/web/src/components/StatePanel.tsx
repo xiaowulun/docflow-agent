@@ -1,12 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FileText, Wrench, AlertTriangle, Activity } from "lucide-react";
 import { getSession, type SessionDetail } from "@/lib/chatApi";
 
 interface StatePanelProps {
   sessionId: string | null;
-  // 刷新触发器：每次发消息后递增，触发重新拉取
   refreshKey?: number;
+}
+
+function estimateTokens(messages: { content: string; role: string }[]): number {
+  let total = 0;
+  for (const m of messages) {
+    const cjk = (m.content.match(/[\u4e00-\u9fff]/g) || []).length;
+    const nonCjk = m.content.length - cjk;
+    total += Math.ceil(cjk * 1.5 + nonCjk / 4);
+  }
+  total += messages.length * 4;
+  return total;
+}
+
+function getContextWindow(model: string): number {
+  if (model.includes("gpt-4o")) return 128000;
+  if (model.includes("deepseek")) return 65536;
+  if (model.includes("claude")) return 200000;
+  return 65536;
 }
 
 export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProps) {
@@ -17,163 +35,161 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
       setSession(null);
       return;
     }
-    getSession(sessionId)
-      .then(setSession)
-      .catch(() => setSession(null));
+    getSession(sessionId).then(setSession).catch(() => setSession(null));
   }, [sessionId, refreshKey]);
 
-  const statusColor = (status?: string) => {
-    switch (status) {
-      case "thinking":
-        return "text-amber-600 bg-amber-50";
-      case "calling_tool":
-        return "text-blue-600 bg-blue-50";
-<<<<<<< HEAD
-      case "awaiting_confirmation":
-        return "text-violet-600 bg-violet-50";
-      case "saving":
-        return "text-emerald-600 bg-emerald-50";
-=======
->>>>>>> origin/main
-      case "error":
-        return "text-red-600 bg-red-50";
-      default:
-        return "text-gray-600 bg-gray-100";
-    }
-  };
-
-  return (
-    <aside className="flex w-72 flex-shrink-0 flex-col bg-white">
-      <div className="border-b border-gray-200 px-4 py-4">
-        <h2 className="text-sm font-semibold text-gray-700">Session State</h2>
-      </div>
-
-      {!session ? (
+  if (!session) {
+    return (
+      <aside className="flex w-64 flex-shrink-0 flex-col border-l border-gray-200/80 bg-[#f9f9f9]">
         <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-gray-400">
           选择一个会话查看状态
         </div>
-      ) : (
-        <div className="flex-1 space-y-4 overflow-y-auto p-4 text-sm">
-          {/* 状态徽章 */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-gray-500">状态</span>
-            <span
-              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusColor(
-                session.status
-              )}`}
-            >
-              {session.status}
-            </span>
+      </aside>
+    );
+  }
+
+  const isOk = session.status !== "error";
+  const usedTokens = estimateTokens(session.messages ?? []);
+  const maxTokens = getContextWindow(session.model);
+  const percent = Math.min((usedTokens / maxTokens) * 100, 100);
+  const barColor =
+    percent > 80 ? "bg-red-500" : percent > 50 ? "bg-amber-500" : "bg-emerald-500";
+
+  return (
+    <aside className="flex w-64 flex-shrink-0 flex-col border-l border-gray-200/80 bg-[#f9f9f9]">
+      <div className="flex-1 space-y-5 overflow-y-auto px-4 py-5">
+        {/* Status */}
+        <div className="flex items-center gap-2">
+          <span className={`inline-block h-2 w-2 rounded-full ${isOk ? "bg-emerald-500" : "bg-red-500"}`} />
+          <span className={`text-[13px] font-medium ${isOk ? "text-emerald-600" : "text-red-600"}`}>
+            {isOk ? "运行正常" : "出错了"}
+          </span>
+        </div>
+
+        {/* Meta */}
+        <div>
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-gray-400">会话信息</p>
+          <div className="space-y-2 rounded-xl border border-gray-200/80 bg-white p-3">
+            <Meta label="消息数" value={String(session.messages?.length ?? 0)} />
+            <Meta label="模型" value={session.model} mono />
+            <Meta label="创建" value={formatTime(session.createdAt)} />
+            <Meta label="更新" value={formatTime(session.updatedAt)} />
           </div>
+        </div>
 
-          {/* 元数据 */}
-          <Info label="Session ID" value={session.id} mono />
-          <Info
-            label="消息数"
-            value={String(session.messages?.length ?? 0)}
-          />
-          <Info label="当前模型" value={session.model} mono />
-          <Info label="创建时间" value={formatTime(session.createdAt)} />
-          <Info label="更新时间" value={formatTime(session.updatedAt)} />
+        {/* Pending */}
+        {session.status === "awaiting_confirmation" && (
+          <div className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 ring-1 ring-amber-100">
+            <AlertTriangle size={13} className="mt-0.5 flex-shrink-0 text-amber-500" strokeWidth={2} />
+            <p className="text-[11px] leading-relaxed text-amber-700">
+              有草稿待确认，回复"保存"即可写入文件。
+            </p>
+          </div>
+        )}
 
-<<<<<<< HEAD
-          <Info
-            label="内容数"
-            value={String(session.contents?.length ?? 0)}
-          />
-
-          {session.status === "awaiting_confirmation" && (
-            <div className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700">
-              当前有草稿待确认，用户可以继续要求保存，默认格式为 md。
+        {/* Documents */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <FileText size={12} className="text-gray-400" strokeWidth={2} />
+            <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">文档列表</span>
+          </div>
+          {(session.contents ?? []).length === 0 ? (
+            <p className="rounded-lg border border-dashed border-gray-200 py-4 text-center text-[11px] text-gray-400">
+              暂无文档
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {(session.contents ?? []).map((item) => (
+                <div key={item.id} className="rounded-lg border border-gray-200/80 bg-white p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[12px] font-medium text-gray-800">{item.title}</span>
+                    <span
+                      className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                        item.is_saved
+                          ? "bg-emerald-50 text-emerald-600"
+                          : "bg-amber-50 text-amber-600"
+                      }`}
+                    >
+                      {item.is_saved ? item.output_format : "草稿"}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[11px] leading-relaxed text-gray-500">
+                    {item.content}
+                  </p>
+                </div>
+              ))}
             </div>
           )}
+        </div>
 
-=======
->>>>>>> origin/main
-          {/* 可用工具 */}
-          <div>
-            <p className="mb-1 text-xs text-gray-500">可用工具</p>
+        {/* Tools */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <Wrench size={12} className="text-gray-400" strokeWidth={2} />
+            <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">可用工具</span>
+          </div>
+          {(session.tools ?? []).length === 0 ? (
+            <span className="text-[11px] text-gray-400">无</span>
+          ) : (
             <div className="flex flex-wrap gap-1">
               {(session.tools ?? []).map((t) => (
                 <span
                   key={t.name}
-                  className="rounded bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700"
+                  className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-600 ring-1 ring-gray-200"
                   title={t.description}
                 >
                   {t.name}
                 </span>
               ))}
-              {(session.tools ?? []).length === 0 && (
-                <span className="text-xs text-gray-400">无</span>
-              )}
             </div>
-          </div>
-<<<<<<< HEAD
-
-          <div>
-            <p className="mb-1 text-xs text-gray-500">当前内容</p>
-            <div className="space-y-2">
-              {(session.contents ?? []).map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded border border-gray-200 bg-gray-50 px-2 py-2 text-xs text-gray-700"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-gray-800">{item.title}</span>
-                    <span
-                      className={`rounded px-1.5 py-0.5 ${
-                        item.is_saved
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-amber-100 text-amber-700"
-                      }`}
-                    >
-                      {item.is_saved ? `已保存 ${item.output_format}` : "草稿"}
-                    </span>
-                  </div>
-                  <p className="mt-1 line-clamp-3 whitespace-pre-wrap text-gray-600">
-                    {item.content}
-                  </p>
-                </div>
-              ))}
-              {(session.contents ?? []).length === 0 && (
-                <span className="text-xs text-gray-400">暂无内容</span>
-              )}
-            </div>
-          </div>
-=======
->>>>>>> origin/main
+          )}
         </div>
-      )}
+
+        {/* Context Window */}
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <Activity size={12} className="text-gray-400" strokeWidth={2} />
+            <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">上下文窗口</span>
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-200">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                  style={{ width: `${Math.max(percent, 2)}%` }}
+                />
+              </div>
+              <span className="w-8 text-right font-mono text-[10px] text-gray-500">
+                {percent.toFixed(0)}%
+              </span>
+            </div>
+            <p className="font-mono text-[10px] text-gray-400">
+              {(usedTokens / 1000).toFixed(0)}K / {(maxTokens / 1000).toFixed(0)}K tokens
+            </p>
+          </div>
+        </div>
+      </div>
     </aside>
   );
 }
 
-function Info({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function Meta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
-      <p className="mb-0.5 text-xs text-gray-500">{label}</p>
-      <p
-        className={`break-all text-xs text-gray-800 ${
-          mono ? "font-mono" : ""
-        }`}
-      >
-        {value}
-      </p>
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[11px] text-gray-400">{label}</span>
+      <span className={`text-[11px] text-gray-700 ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
 }
 
 function formatTime(iso: string): string {
   try {
-    return new Date(iso).toLocaleString("zh-CN");
+    return new Date(iso).toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   } catch {
     return iso;
   }

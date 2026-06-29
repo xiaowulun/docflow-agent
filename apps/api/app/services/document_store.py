@@ -52,7 +52,6 @@ class DocumentStore:
             document.touch()
             return document
 
-<<<<<<< HEAD
     def mark_saved(
         self,
         document_id: str,
@@ -70,8 +69,6 @@ class DocumentStore:
             document.touch()
             return document
 
-=======
->>>>>>> origin/main
 
 _store: DocumentStore | None = None
 

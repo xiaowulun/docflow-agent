@@ -9,6 +9,7 @@ Executor 通过 registry.get(name) 获取工具并调用。
     def read_docx(path: str) -> dict:
         ...
 """
+from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any

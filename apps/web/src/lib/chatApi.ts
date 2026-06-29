@@ -21,30 +21,24 @@ async function request<T>(
     throw new Error(`网络请求失败：${e.message || "无法连接服务器"}`);
   }
 
-  // 先拿原始文本，再决定怎么解析
   const text = await res.text();
 
   if (!res.ok) {
-    // 尝试解析 JSON 错误信息
     let detail = text;
     try {
       const parsed = JSON.parse(text);
       detail = parsed.detail || parsed.message || JSON.stringify(parsed);
     } catch {
-      // 非 JSON（如 "Internal Server Error"），直接用原文
     }
     throw new Error(detail || `请求失败 (${res.status})`);
   }
 
-  // 成功响应也容错：可能返回非 JSON
   try {
     return JSON.parse(text) as T;
   } catch {
     throw new Error(`响应解析失败：${text.slice(0, 200)}`);
   }
 }
-
-// ---------- 类型 ----------
 
 export interface SessionSummary {
   id: string;
@@ -62,9 +56,11 @@ export interface ChatMessage {
   tool_name?: string;
   tool_calls?: { name: string; arguments: any }[];
   created_at?: string;
+  metadata?: {
+    files?: Array<{id: string; filename: string; file_type: string; extension: string; size_bytes: number}>;
+  };
 }
 
-<<<<<<< HEAD
 export interface SessionContent {
   id: string;
   title: string;
@@ -77,8 +73,6 @@ export interface SessionContent {
   updatedAt: string;
 }
 
-=======
->>>>>>> origin/main
 export interface SessionDetail {
   id: string;
   title: string;
@@ -86,15 +80,10 @@ export interface SessionDetail {
   model: string;
   messages: ChatMessage[];
   tools: ToolInfo[];
-<<<<<<< HEAD
   contents: SessionContent[];
-=======
->>>>>>> origin/main
   createdAt: string;
   updatedAt: string;
 }
-
-// ---------- API ----------
 
 /** 会话列表 */
 export function listSessions(): Promise<SessionSummary[]> {
@@ -133,14 +122,116 @@ export function renameSession(id: string, title: string): Promise<SessionDetail>
 /** 发送消息（驱动 agent 循环） */
 export function sendMessage(
   sessionId: string,
-  content: string
+  content: string,
+  fileIds: string[] = []
 ): Promise<{ reply: string }> {
   return request<{ reply: string }>(
     `${API_BASE}/chat/sessions/${sessionId}/messages`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, file_ids: fileIds }),
     }
   );
+}
+
+/** 上传文件 */
+export async function uploadFile(file: File): Promise<{
+  id: string;
+  filename: string;
+  file_type: string;
+  extension: string;
+  size_bytes: number;
+  extracted_text?: string;
+}> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/files/upload`, {
+      method: "POST",
+      body: formData,
+    });
+  } catch (e: any) {
+    throw new Error(`网络请求失败：${e.message || "无法连接服务器"}`);
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text);
+      const raw = parsed.detail || parsed.message || parsed;
+      // 确保 detail 是字符串，避免 [object Object]
+      detail = typeof raw === "string" ? raw : JSON.stringify(raw);
+    } catch {}
+    throw new Error(detail || `请求失败 (${res.status})`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`响应解析失败：${text.slice(0, 200)}`);
+  }
+}
+
+/** 流式事件类型 */
+export type StreamEvent =
+  | { type: "text"; content: string }
+  | { type: "tool_call"; tools: string[] }
+  | { type: "tool_result"; name: string; result: any }
+  | { type: "done" }
+  | { type: "error"; message: string };
+
+/** 流式发送消息，返回异步迭代器 */
+export async function* sendMessageStream(
+  sessionId: string,
+  content: string,
+  fileIds: string[] = []
+): AsyncGenerator<StreamEvent> {
+  const res = await fetch(`${API_BASE}/chat/sessions/${sessionId}/messages/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, file_ids: fileIds }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `请求失败 (${res.status})`);
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("无法读取响应流");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    
+    // 按 SSE 格式分割（每个事件以 \n\n 结束）
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+
+    for (const event of events) {
+      const lines = event.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data.trim()) {
+            try {
+              const parsed = JSON.parse(data) as StreamEvent;
+              yield parsed;
+            } catch (e) {
+              console.warn("SSE 解析失败:", data, e);
+            }
+          }
+        }
+      }
+    }
+  }
 }

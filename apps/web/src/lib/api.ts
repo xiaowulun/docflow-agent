@@ -38,7 +38,8 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
 
   if (!res.ok) {
     const error = await res.json();
-    throw new Error(error.detail || "Upload failed");
+    const detail = error.detail || "Upload failed";
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
 
   return res.json();

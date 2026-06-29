@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Sidebar from "@/components/Sidebar";
 import ChatWindow from "@/components/ChatWindow";
 import StatePanel from "@/components/StatePanel";
+import { deleteSession } from "@/lib/chatApi";
 
 export interface SessionInfo {
   id: string;
@@ -15,24 +16,41 @@ export interface SessionInfo {
 export default function Home() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [stateRefreshKey, setStateRefreshKey] = useState(0);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+
+  const handleMessageSent = useCallback(() => {
+    setStateRefreshKey((k) => k + 1);
+    setSidebarRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleDeleteSession = useCallback(
+    async (deletedId: string) => {
+      // 1. 先清除活跃会话 ID，让 ChatWindow 停止请求
+      setActiveSessionId(null);
+      // 2. 再执行删除
+      try {
+        await deleteSession(deletedId);
+      } catch {
+        // 忽略
+      }
+      // 3. 刷新侧边栏
+      setSidebarRefreshKey((k) => k + 1);
+    },
+    []
+  );
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-gray-50 text-gray-800">
-      {/* 左栏：会话历史 */}
+    <div className="flex h-screen w-screen overflow-hidden bg-white text-gray-800">
       <Sidebar
         activeSessionId={activeSessionId}
-        onSelect={(id) => setActiveSessionId(id)}
+        onSelect={setActiveSessionId}
+        onDelete={handleDeleteSession}
+        refreshKey={sidebarRefreshKey}
       />
-
-      {/* 中栏：对话区 */}
-      <main className="flex flex-1 flex-col border-x border-gray-200 bg-white">
-        <ChatWindow
-          sessionId={activeSessionId}
-          onMessageSent={() => setStateRefreshKey((k) => k + 1)}
-        />
-      </main>
-
-      {/* 右栏：state 面板 */}
+      <ChatWindow
+        sessionId={activeSessionId}
+        onMessageSent={handleMessageSent}
+      />
       <StatePanel sessionId={activeSessionId} refreshKey={stateRefreshKey} />
     </div>
   );
