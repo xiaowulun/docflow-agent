@@ -7,10 +7,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-router = APIRouter()
+from apps.api.app.services.task_service import get_task_service
+from packages.schemas.task import TaskStatus
 
-# 临时使用内存存储，后续换 SQLite
-_orchestrators: dict = {}
+router = APIRouter()
 
 
 class CreateTaskRequest(BaseModel):
@@ -21,40 +21,21 @@ class CreateTaskRequest(BaseModel):
 class ConfirmTaskRequest(BaseModel):
     task_id: str
     confirmed: bool
+    user_input: str | None = None
 
 
 @router.post("/")
 async def create_task(request: CreateTaskRequest):
     """创建任务，分析文件并生成计划"""
-    from packages.agent_core.orchestrator import Orchestrator
-
-    orchestrator = Orchestrator()
-
-    # 启动任务
-    task = orchestrator.start(request.file_path, request.user_input)
-
-    # 分析并生成计划
-    plan = orchestrator.analyze_and_plan(task.task_id)
-
-    # 存储 orchestrator
-    _orchestrators[task.task_id] = orchestrator
-
-    return {
-        "task_id": task.task_id,
-        "status": task.status.value,
-        "plan_display": orchestrator.get_plan_display(task.task_id),
-        "needs_confirmation": plan.needs_confirmation(),
-    }
+    service = get_task_service()
+    return service.create_and_plan(request.file_path, request.user_input)
 
 
 @router.get("/{task_id}")
 async def get_task(task_id: str):
     """查询任务状态"""
-    orchestrator = _orchestrators.get(task_id)
-    if not orchestrator:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    task = orchestrator.get_task(task_id)
+    service = get_task_service()
+    task = service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -63,37 +44,33 @@ async def get_task(task_id: str):
         "status": task.status.value,
         "task_type": task.task_type.value,
         "error": task.error_message,
+        "confirmation_request": (
+            task.confirmation_request.model_dump()
+            if task.confirmation_request
+            else None
+        ),
     }
 
 
 @router.post("/{task_id}/confirm")
 async def confirm_task(task_id: str, request: ConfirmTaskRequest):
     """确认或拒绝执行计划"""
-    orchestrator = _orchestrators.get(task_id)
-    if not orchestrator:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    if not request.confirmed:
-        return {"status": "rejected", "message": "Plan rejected by user"}
-
-    # 确认并执行
-    orchestrator.confirm(task_id)
-    result = orchestrator.execute(task_id)
-
-    return {
-        "status": "done" if result["success"] else "failed",
-        "result": result,
-    }
+    service = get_task_service()
+    try:
+        return service.confirm_and_execute(
+            task_id,
+            request.confirmed,
+            user_input=request.user_input,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{task_id}/audit")
 async def get_audit_log(task_id: str):
     """获取任务审计日志"""
-    orchestrator = _orchestrators.get(task_id)
-    if not orchestrator:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    audit_log = orchestrator.get_audit_log(task_id)
+    service = get_task_service()
+    audit_log = service.get_audit_log(task_id)
     if not audit_log:
         raise HTTPException(status_code=404, detail="Audit log not found")
 

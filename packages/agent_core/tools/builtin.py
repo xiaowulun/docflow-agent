@@ -5,6 +5,8 @@ pi agent 内置工具集
 生成和编辑先写入草稿，只有在用户确认后才调用保存工具落盘。
 """
 
+import json
+import inspect
 import re
 from contextvars import ContextVar, Token
 from pathlib import Path
@@ -28,6 +30,21 @@ from packages.tooling.officecli.docx import (  # noqa: F401
     swap_docx,
     validate_docx,
     view_docx,
+)
+from packages.tooling.officecli.advanced import (  # noqa: F401
+    add_part_docx,
+    add_part_pptx,
+    add_part_xlsx,
+    dump_docx,
+    dump_pptx,
+    office_command,
+    office_get_marks,
+    office_goto,
+    office_mark,
+    office_refresh,
+    office_unmark,
+    office_unwatch,
+    office_watch,
 )
 from packages.tooling.officecli.pptx import (  # noqa: F401
     add_pptx,
@@ -361,6 +378,113 @@ def _next_available_path(output_dir: Path, stem: str, fmt: str) -> Path:
     return output_path
 
 
+def _office_result_success(result: dict) -> bool:
+    return isinstance(result, dict) and result.get("success") is True
+
+
+def _stringify_office_data(data) -> str:
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data.strip()
+    try:
+        return json.dumps(data, ensure_ascii=False)
+    except Exception:
+        return str(data).strip()
+
+
+def _build_office_preview(file_path: str) -> tuple[str, str]:
+    resolved_path = Path(file_path).expanduser().resolve()
+    suffix = resolved_path.suffix.lower()
+
+    if suffix == ".docx":
+        result = view_docx(str(resolved_path), mode="text")
+        preview = _stringify_office_data(result.get("data"))
+        return "docx", preview or "空白 Word 文档"
+    if suffix == ".pptx":
+        result = view_pptx(str(resolved_path), mode="outline")
+        preview = _stringify_office_data(result.get("data"))
+        return "pptx", preview or "空白 PowerPoint 演示文稿"
+    if suffix == ".xlsx":
+        result = view_xlsx(str(resolved_path), mode="text")
+        preview = _stringify_office_data(result.get("data"))
+        return "xlsx", preview or "空白 Excel 工作簿"
+
+    return suffix.lstrip(".") or "file", resolved_path.name
+
+
+def _sync_office_document(file_path: str) -> None:
+    session_id = _CURRENT_SESSION_ID.get()
+    if not session_id:
+        return
+
+    resolved_path = Path(file_path).expanduser().resolve()
+    content_type, preview = _build_office_preview(str(resolved_path))
+    store = get_document_store()
+    store.upsert_file_document(
+        session_id=session_id,
+        title=resolved_path.stem,
+        content=preview,
+        content_type=content_type,
+        output_format=resolved_path.suffix.lstrip(".").lower() or content_type,
+        file_path=str(resolved_path),
+        is_saved=True,
+    )
+
+
+def _wrap_office_tool(func, *, path_param: str):
+    signature = inspect.signature(func)
+
+    def wrapped(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if not _office_result_success(result):
+            return result
+
+        try:
+            bound = signature.bind_partial(*args, **kwargs)
+            file_path = bound.arguments.get(path_param)
+            if file_path:
+                _sync_office_document(file_path)
+        except Exception:
+            pass
+
+        return result
+
+    return wrapped
+
+
+def _wrap_office_command_tool(func):
+    def wrapped(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if not _office_result_success(result):
+            return result
+
+        try:
+            raw_args = kwargs.get("args")
+            if raw_args is None and args:
+                raw_args = args[0]
+            if not isinstance(raw_args, list):
+                return result
+
+            file_path = next(
+                (
+                    item
+                    for item in raw_args
+                    if isinstance(item, str)
+                    and item.lower().endswith((".docx", ".xlsx", ".pptx"))
+                ),
+                None,
+            )
+            if file_path:
+                _sync_office_document(file_path)
+        except Exception:
+            pass
+
+        return result
+
+    return wrapped
+
+
 web_search_schema = {
     "type": "function",
     "function": {
@@ -631,11 +755,14 @@ BUILTIN_TOOL_FUNCS = {
     "web_search": web_search,
     "generate_image": generate_image,
     "analyze_image": analyze_image,
+    "office_command": _wrap_office_command_tool(office_command),
     # 基础工具
-    "create_docx": create_docx,
-    "create_xlsx": create_xlsx,
-    "create_pptx": create_pptx,
-    "add_pptx_slide_with_layout": add_pptx_slide_with_layout,
+    "create_docx": _wrap_office_tool(create_docx, path_param="path"),
+    "create_xlsx": _wrap_office_tool(create_xlsx, path_param="path"),
+    "create_pptx": _wrap_office_tool(create_pptx, path_param="path"),
+    "add_pptx_slide_with_layout": _wrap_office_tool(
+        add_pptx_slide_with_layout, path_param="file_path"
+    ),
     "view_docx": view_docx,
     "view_xlsx": view_xlsx,
     "view_pptx": view_pptx,
@@ -645,52 +772,64 @@ BUILTIN_TOOL_FUNCS = {
     "query_docx": query_docx,
     "query_xlsx": query_xlsx,
     "query_pptx": query_pptx,
-    "set_docx": set_docx,
-    "set_xlsx": set_xlsx,
-    "set_pptx": set_pptx,
-    "add_docx": add_docx,
-    "add_xlsx": add_xlsx,
-    "add_pptx": add_pptx,
-    "remove_docx": remove_docx,
-    "remove_xlsx": remove_xlsx,
-    "remove_pptx": remove_pptx,
-    "merge_document": merge_document,
+    "set_docx": _wrap_office_tool(set_docx, path_param="file_path"),
+    "set_xlsx": _wrap_office_tool(set_xlsx, path_param="file_path"),
+    "set_pptx": _wrap_office_tool(set_pptx, path_param="file_path"),
+    "add_docx": _wrap_office_tool(add_docx, path_param="file_path"),
+    "add_xlsx": _wrap_office_tool(add_xlsx, path_param="file_path"),
+    "add_pptx": _wrap_office_tool(add_pptx, path_param="file_path"),
+    "remove_docx": _wrap_office_tool(remove_docx, path_param="file_path"),
+    "remove_xlsx": _wrap_office_tool(remove_xlsx, path_param="file_path"),
+    "remove_pptx": _wrap_office_tool(remove_pptx, path_param="file_path"),
+    "merge_document": _wrap_office_tool(merge_document, path_param="output_path"),
     "office_help": office_help,
+    "office_watch": office_watch,
+    "office_unwatch": office_unwatch,
+    "office_mark": office_mark,
+    "office_unmark": office_unmark,
+    "office_get_marks": office_get_marks,
+    "office_goto": office_goto,
+    "office_refresh": _wrap_office_tool(office_refresh, path_param="file_path"),
     # 位置控制
-    "move_docx": move_docx,
-    "move_xlsx": move_xlsx,
-    "move_pptx": move_pptx,
-    "swap_docx": swap_docx,
-    "swap_xlsx": swap_xlsx,
-    "swap_pptx": swap_pptx,
+    "move_docx": _wrap_office_tool(move_docx, path_param="file_path"),
+    "move_xlsx": _wrap_office_tool(move_xlsx, path_param="file_path"),
+    "move_pptx": _wrap_office_tool(move_pptx, path_param="file_path"),
+    "swap_docx": _wrap_office_tool(swap_docx, path_param="file_path"),
+    "swap_xlsx": _wrap_office_tool(swap_xlsx, path_param="file_path"),
+    "swap_pptx": _wrap_office_tool(swap_pptx, path_param="file_path"),
     # 原始 XML
     "raw_docx": raw_docx,
     "raw_xlsx": raw_xlsx,
     "raw_pptx": raw_pptx,
-    "raw_set_docx": raw_set_docx,
-    "raw_set_xlsx": raw_set_xlsx,
-    "raw_set_pptx": raw_set_pptx,
+    "raw_set_docx": _wrap_office_tool(raw_set_docx, path_param="file_path"),
+    "raw_set_xlsx": _wrap_office_tool(raw_set_xlsx, path_param="file_path"),
+    "raw_set_pptx": _wrap_office_tool(raw_set_pptx, path_param="file_path"),
     # 验证
     "validate_docx": validate_docx,
     "validate_xlsx": validate_xlsx,
     "validate_pptx": validate_pptx,
     # 批量操作
-    "batch_docx": batch_docx,
-    "batch_xlsx": batch_xlsx,
-    "batch_pptx": batch_pptx,
+    "batch_docx": _wrap_office_tool(batch_docx, path_param="file_path"),
+    "batch_xlsx": _wrap_office_tool(batch_xlsx, path_param="file_path"),
+    "batch_pptx": _wrap_office_tool(batch_pptx, path_param="file_path"),
     # 数据导入
-    "import_xlsx": import_xlsx,
+    "import_xlsx": _wrap_office_tool(import_xlsx, path_param="file_path"),
     # 驻留模式
     "office_open": office_open,
     "office_close": office_close,
-    "office_save": office_save,
+    "office_save": _wrap_office_tool(office_save, path_param="file_path"),
+    "dump_docx": dump_docx,
+    "dump_pptx": dump_pptx,
+    "add_part_docx": _wrap_office_tool(add_part_docx, path_param="file_path"),
+    "add_part_xlsx": _wrap_office_tool(add_part_xlsx, path_param="file_path"),
+    "add_part_pptx": _wrap_office_tool(add_part_pptx, path_param="file_path"),
     # 清空和替换
-    "clear_docx": clear_docx,
-    "clear_xlsx": clear_xlsx,
-    "clear_pptx": clear_pptx,
-    "replace_docx": replace_docx,
-    "replace_xlsx": replace_xlsx,
-    "replace_pptx": replace_pptx,
+    "clear_docx": _wrap_office_tool(clear_docx, path_param="file_path"),
+    "clear_xlsx": _wrap_office_tool(clear_xlsx, path_param="file_path"),
+    "clear_pptx": _wrap_office_tool(clear_pptx, path_param="file_path"),
+    "replace_docx": _wrap_office_tool(replace_docx, path_param="file_path"),
+    "replace_xlsx": _wrap_office_tool(replace_xlsx, path_param="file_path"),
+    "replace_pptx": _wrap_office_tool(replace_pptx, path_param="file_path"),
 }
 
 

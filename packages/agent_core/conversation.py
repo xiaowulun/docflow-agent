@@ -12,6 +12,7 @@ ConversationAgent - 对话型 Agent
 """
 
 import json
+from time import perf_counter
 from typing import Generator
 
 from openai import OpenAI
@@ -129,12 +130,14 @@ class ConversationAgent:
         final_reply = ""
         changed_content = False
         saved_content = False
+        response_started_at = perf_counter()
 
         for _ in range(max_iterations):
             api_messages = self._build_api_messages(session)
 
-            response = self.client.chat.completions.create(
-                model=self.model,
+            client, model = self._get_model_and_client(api_messages)
+            response = client.chat.completions.create(
+                model=model,
                 messages=api_messages,
                 tools=BUILTIN_TOOLS,
                 temperature=0.7,
@@ -210,10 +213,29 @@ class ConversationAgent:
                 continue
 
             final_reply = assistant_msg.content or ""
+            if not final_reply.strip():
+                final_reply = self._generate_forced_final_reply(session)
             session.messages.append(
-                Message(role="assistant", content=final_reply)
+                Message(
+                    role="assistant",
+                    content=final_reply,
+                    metadata={
+                        "response_ms": int((perf_counter() - response_started_at) * 1000)
+                    },
+                )
             )
             break
+        else:
+            final_reply = self._generate_forced_final_reply(session)
+            session.messages.append(
+                Message(
+                    role="assistant",
+                    content=final_reply,
+                    metadata={
+                        "response_ms": int((perf_counter() - response_started_at) * 1000)
+                    },
+                )
+            )
 
         if changed_content and not saved_content:
             session.status = SessionStatus.AWAITING_CONFIRMATION
@@ -244,6 +266,8 @@ class ConversationAgent:
         max_iterations = 5
         changed_content = False
         saved_content = False
+        response_started_at = perf_counter()
+        final_content = ""
 
         for _ in range(max_iterations):
             api_messages = self._build_api_messages(session)
@@ -259,8 +283,9 @@ class ConversationAgent:
                         })
                         break
 
-            response = self.client.chat.completions.create(
-                model=self.model,
+            client, model = self._get_model_and_client(api_messages)
+            response = client.chat.completions.create(
+                model=model,
                 messages=api_messages,
                 tools=BUILTIN_TOOLS,
                 temperature=0.7,
@@ -366,10 +391,33 @@ class ConversationAgent:
 
             # 没有工具调用，完成
             final_content = "".join(content_chunks)
+            if not final_content.strip():
+                final_content = self._generate_forced_final_reply(session)
+                yield final_content
             session.messages.append(
-                Message(role="assistant", content=final_content)
+                Message(
+                    role="assistant",
+                    content=final_content,
+                    metadata={
+                        "response_ms": int((perf_counter() - response_started_at) * 1000)
+                    },
+                )
             )
             break
+        else:
+            final_content = ""
+            for chunk in self._stream_forced_final_reply(session):
+                final_content += chunk
+                yield chunk
+            session.messages.append(
+                Message(
+                    role="assistant",
+                    content=final_content,
+                    metadata={
+                        "response_ms": int((perf_counter() - response_started_at) * 1000)
+                    },
+                )
+            )
 
         if changed_content and not saved_content:
             session.status = SessionStatus.AWAITING_CONFIRMATION
@@ -379,6 +427,57 @@ class ConversationAgent:
 
         # 结束标记
         yield "\0DONE\0"
+
+    def _generate_forced_final_reply(self, session: Session) -> str:
+        """工具链结束后强制生成一条面向用户的最终回复。"""
+        api_messages = self._build_api_messages(session)
+        api_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "你已经拿到了足够的工具结果。"
+                    "现在不要再调用任何工具，直接基于现有上下文给用户一条完整、自然的最终回答。"
+                ),
+            }
+        )
+        client, model = self._get_model_and_client(api_messages)
+        response = client.chat.completions.create(
+            model=model,
+            messages=api_messages,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content or "我已经处理完成，但暂时没有生成可展示的最终说明。"
+
+    def _stream_forced_final_reply(self, session: Session) -> Generator[str, None, None]:
+        """流式兜底最终回复，避免工具调用上限后页面没有 assistant 文本。"""
+        api_messages = self._build_api_messages(session)
+        api_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "你已经拿到了足够的工具结果。"
+                    "现在不要再调用任何工具，直接基于现有上下文给用户一条完整、自然的最终回答。"
+                ),
+            }
+        )
+        client, model = self._get_model_and_client(api_messages)
+        response = client.chat.completions.create(
+            model=model,
+            messages=api_messages,
+            temperature=0.7,
+            stream=True,
+        )
+        yielded = False
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yielded = True
+                yield delta.content
+
+        if not yielded:
+            yield "我已经处理完成，但暂时没有生成可展示的最终说明。"
 
     def _build_api_messages(self, session: Session) -> list[dict]:
         """
@@ -403,17 +502,19 @@ class ConversationAgent:
                     "直接用自然的口语化中文回答，段落之间空行即可，列举内容时直接用文字叙述或用数字加顿号（如：1、2、3、）。"
                     "除非用户明确要求列出内部细节，否则不要提及工具名称或技术实现。"
                     "\n\n"
-                    "【PPT 制作规范 - 重要】"
-                    "创建 PPT 时，必须使用 add_pptx_slide_with_layout 工具，而不是 add_pptx。"
-                    "add_pptx_slide_with_layout 会自动计算元素位置，避免内容堆叠在左上角。\n"
-                    "用法示例：\n"
-                    "add_pptx_slide_with_layout(\n"
-                    "  file_path='demo.pptx',\n"
-                    "  title='幻灯片标题',\n"
-                    "  content=[{'type': 'shape', 'props': {'text': '正文内容'}}],\n"
-                    "  layout='title_content'  # 可选：title_only | title_content | two_column | image_text\n"
-                    ")\n"
-                    "只有在需要精细控制位置时，才使用 add_pptx 并手动指定 x/y/width/height 属性。"
+                    "【OfficeCLI 使用规范 - 重要】"
+                    "处理 Word、Excel、PPT 时，优先使用 officecli 官方能力，不要默认退化成空白文档加零碎拼装。"
+                    "当不确定属性名、命令语法、元素类型、参数格式或官方能力边界时，必须先调用 office_help，不要猜。"
+                    "当用户提供了现成模板或明确说按模板生成时，优先考虑 merge_document。"
+                    "当一个 Office 任务需要多步编辑时，优先考虑 batch_docx、batch_xlsx、batch_pptx。"
+                    "当需要浏览器预览、定位、人工复核、给元素打标记时，可以使用 office_watch、office_goto、office_mark、office_get_marks。"
+                    "当需要导出回放脚本或创建高级部件时，可以使用 dump_docx、dump_pptx、add_part_docx、add_part_xlsx、add_part_pptx。"
+                    "如果现有独立工具仍覆盖不了官方命令面，可以使用 office_command 直接调用 officecli 子命令。"
+                    "完成重要 Office 文档生成或修改后，优先用 validate_docx、validate_xlsx、validate_pptx 或 view_* 的 issues、html、screenshot 模式做自检。"
+                    "\n\n"
+                    "【PPT 制作规范】"
+                    "创建 PPT 时，默认优先使用 add_pptx_slide_with_layout。"
+                    "只有在需要精细控制位置、原生批量命令或官方高级能力时，才改用 add_pptx、batch_pptx 或 office_command。"
                 ),
             }
         ]

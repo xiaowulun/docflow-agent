@@ -5,13 +5,13 @@ Planner 生成结构化计划，描述要执行的操作列表。
 每一步是一个 Action，包含工具名和参数。
 """
 
-from enum import Enum
+from enum import StrEnum
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     """操作类型"""
 
     READ = "read"  # 只读操作
@@ -40,10 +40,14 @@ class ExecutionPlan(BaseModel):
     uncertainties: list[str] = Field(default_factory=list)  # 不确定项
     expected_output: str = ""  # 预期输出描述
 
+    def get_confirmation_required_actions(self) -> list[Action]:
+        """获取所有需要用户确认的步骤"""
+        return [a for a in self.actions if a.requires_confirmation]
+
     def get_writable_actions(self) -> list[Action]:
         """获取所有需要写入的操作"""
         return [a for a in self.actions if a.action_type in (ActionType.WRITE, ActionType.EXPORT)]
 
     def needs_confirmation(self) -> bool:
         """是否需要用户确认"""
-        return any(a.requires_confirmation for a in self.actions)
+        return bool(self.uncertainties) or any(a.requires_confirmation for a in self.actions)

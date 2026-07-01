@@ -4,6 +4,11 @@
 定义任务状态流转规则，校验状态转换是否合法。
 状态流转：
     created -> analyzing -> planned -> awaiting_confirm -> executing -> verifying -> done / failed
+
+说明：
+    awaiting_confirm 是统一阻塞态，具体等待原因通过 confirmation_request.kind 表达。
+    因此允许从 analyzing / planned / executing 进入 awaiting_confirm，
+    也允许确认后回到对应阶段继续。
 """
 
 from packages.schemas.task import TaskStatus
@@ -11,10 +16,15 @@ from packages.schemas.task import TaskStatus
 # 合法的状态转换映射
 VALID_TRANSITIONS: dict[TaskStatus, list[TaskStatus]] = {
     TaskStatus.CREATED: [TaskStatus.ANALYZING, TaskStatus.FAILED],
-    TaskStatus.ANALYZING: [TaskStatus.PLANNED, TaskStatus.FAILED],
-    TaskStatus.PLANNED: [TaskStatus.AWAITING_CONFIRM, TaskStatus.FAILED],
-    TaskStatus.AWAITING_CONFIRM: [TaskStatus.EXECUTING, TaskStatus.FAILED],
-    TaskStatus.EXECUTING: [TaskStatus.VERIFYING, TaskStatus.FAILED],
+    TaskStatus.ANALYZING: [TaskStatus.PLANNED, TaskStatus.AWAITING_CONFIRM, TaskStatus.FAILED],
+    TaskStatus.PLANNED: [TaskStatus.AWAITING_CONFIRM, TaskStatus.EXECUTING, TaskStatus.FAILED],
+    TaskStatus.AWAITING_CONFIRM: [
+        TaskStatus.ANALYZING,
+        TaskStatus.PLANNED,
+        TaskStatus.EXECUTING,
+        TaskStatus.FAILED,
+    ],
+    TaskStatus.EXECUTING: [TaskStatus.AWAITING_CONFIRM, TaskStatus.VERIFYING, TaskStatus.FAILED],
     TaskStatus.VERIFYING: [TaskStatus.DONE, TaskStatus.FAILED],
     TaskStatus.DONE: [],  # 终态
     TaskStatus.FAILED: [],  # 终态

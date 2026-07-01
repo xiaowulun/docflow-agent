@@ -5,14 +5,14 @@
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
-class FileType(str, Enum):
+class FileType(StrEnum):
     """支持的文件类型"""
 
     WORD = "word"
@@ -62,3 +62,4 @@ class FileAnalysis(BaseModel):
     page_count: int = 0  # 页数（PDF/Word）
     sheet_names: list[str] = Field(default_factory=list)  # Excel 工作表名
     metadata: dict = Field(default_factory=dict)  # 其他元数据
+    ambiguities: list[str] = Field(default_factory=list)  # 需要人工消解的歧义

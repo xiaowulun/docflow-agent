@@ -11,10 +11,72 @@ Confirmation Gate - 确认闸门
 """
 
 from packages.schemas.plan import ExecutionPlan
+from packages.schemas.task import (
+    ConfirmationKind,
+    ConfirmationRequest,
+    ConfirmationStage,
+)
 
 
 class ConfirmationGate:
     """确认闸门"""
+
+    @staticmethod
+    def build_plan_review_request(plan: ExecutionPlan) -> ConfirmationRequest:
+        """为首次执行前的计划审阅构造确认请求"""
+        action_descriptions = [action.description for action in plan.actions]
+        return ConfirmationRequest(
+            kind=ConfirmationKind.PLAN_REVIEW,
+            stage=ConfirmationStage.PLANNED,
+            message="执行计划已生成，等待用户审阅并确认是否开始执行。",
+            options=["approve", "reject", "revise"],
+            details={
+                "plan_id": plan.plan_id,
+                "action_count": len(plan.actions),
+                "actions": action_descriptions,
+                "uncertainties": plan.uncertainties,
+            },
+            resume_from="plan_execution",
+        )
+
+    @staticmethod
+    def build_ambiguity_request(
+        issues: list[str],
+        *,
+        stage: ConfirmationStage = ConfirmationStage.ANALYZING,
+        resume_from: str | None = None,
+    ) -> ConfirmationRequest:
+        """为歧义消解构造确认请求"""
+        return ConfirmationRequest(
+            kind=ConfirmationKind.AMBIGUITY_RESOLUTION,
+            stage=stage,
+            message="发现需要人工判断的歧义，请先补充或确认后再继续。",
+            options=["provide_input", "reject"],
+            details={"ambiguities": issues},
+            resume_from=resume_from,
+        )
+
+    @staticmethod
+    def build_risky_action_request(
+        *,
+        action_id: str,
+        tool_name: str,
+        description: str,
+        details: dict | None = None,
+    ) -> ConfirmationRequest:
+        """为执行中的高风险操作构造确认请求"""
+        return ConfirmationRequest(
+            kind=ConfirmationKind.RISKY_ACTION,
+            stage=ConfirmationStage.EXECUTING,
+            message=f"即将执行高风险操作：{description}",
+            options=["approve", "reject"],
+            details={
+                "action_id": action_id,
+                "tool_name": tool_name,
+                **(details or {}),
+            },
+            resume_from=f"action:{action_id}",
+        )
 
     @staticmethod
     def format_plan_for_display(plan: ExecutionPlan) -> str:
@@ -28,7 +90,7 @@ class ConfirmationGate:
             格式化的文本
         """
         lines = []
-        lines.append(f"## 执行计划")
+        lines.append("## 执行计划")
         lines.append(f"**意图**: {plan.intent}")
         lines.append("")
         lines.append("### 操作步骤:")
@@ -46,7 +108,7 @@ class ConfirmationGate:
             lines.append("")
 
         if plan.expected_output:
-            lines.append(f"### 预期输出:")
+            lines.append("### 预期输出:")
             lines.append(plan.expected_output)
 
         return "\n".join(lines)

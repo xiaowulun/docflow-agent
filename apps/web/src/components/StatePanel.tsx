@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FileText, Wrench, AlertTriangle, Activity } from "lucide-react";
+import { FileText, AlertTriangle, Activity } from "lucide-react";
 import { getSession, type SessionDetail } from "@/lib/chatApi";
 
 interface StatePanelProps {
@@ -38,19 +38,9 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
     getSession(sessionId).then(setSession).catch(() => setSession(null));
   }, [sessionId, refreshKey]);
 
-  if (!session) {
-    return (
-      <aside className="flex w-64 flex-shrink-0 flex-col border-l border-gray-200/80 bg-[#f9f9f9]">
-        <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-gray-400">
-          选择一个会话查看状态
-        </div>
-      </aside>
-    );
-  }
-
-  const isOk = session.status !== "error";
-  const usedTokens = estimateTokens(session.messages ?? []);
-  const maxTokens = getContextWindow(session.model);
+  const isOk = session ? session.status !== "error" : true;
+  const usedTokens = estimateTokens(session?.messages ?? []);
+  const maxTokens = getContextWindow(session?.model ?? "");
   const percent = Math.min((usedTokens / maxTokens) * 100, 100);
   const barColor =
     percent > 80 ? "bg-red-500" : percent > 50 ? "bg-amber-500" : "bg-emerald-500";
@@ -62,7 +52,7 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
         <div className="flex items-center gap-2">
           <span className={`inline-block h-2 w-2 rounded-full ${isOk ? "bg-emerald-500" : "bg-red-500"}`} />
           <span className={`text-[13px] font-medium ${isOk ? "text-emerald-600" : "text-red-600"}`}>
-            {isOk ? "运行正常" : "出错了"}
+            {session ? (isOk ? "运行正常" : "出错了") : "会话未选中"}
           </span>
         </div>
 
@@ -70,19 +60,19 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
         <div>
           <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-gray-400">会话信息</p>
           <div className="space-y-2 rounded-xl border border-gray-200/80 bg-white p-3">
-            <Meta label="消息数" value={String(session.messages?.length ?? 0)} />
-            <Meta label="模型" value={session.model} mono />
-            <Meta label="创建" value={formatTime(session.createdAt)} />
-            <Meta label="更新" value={formatTime(session.updatedAt)} />
+            <Meta label="消息数" value={String(session?.messages?.length ?? 0)} />
+            <Meta label="模型" value={session?.model ?? "-"} mono />
+            <Meta label="创建" value={session ? formatTime(session.createdAt) : "-"} />
+            <Meta label="更新" value={session ? formatTime(session.updatedAt) : "-"} />
           </div>
         </div>
 
         {/* Pending */}
-        {session.status === "awaiting_confirmation" && (
+        {session?.status === "awaiting_confirmation" && (
           <div className="flex items-start gap-2 rounded-lg bg-amber-50 p-2.5 ring-1 ring-amber-100">
             <AlertTriangle size={13} className="mt-0.5 flex-shrink-0 text-amber-500" strokeWidth={2} />
             <p className="text-[11px] leading-relaxed text-amber-700">
-              有草稿待确认，回复"保存"即可写入文件。
+              当前会话有待确认步骤，直接在中间对话区继续处理即可。
             </p>
           </div>
         )}
@@ -93,13 +83,13 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
             <FileText size={12} className="text-gray-400" strokeWidth={2} />
             <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">文档列表</span>
           </div>
-          {(session.contents ?? []).length === 0 ? (
+          {(session?.contents ?? []).length === 0 ? (
             <p className="rounded-lg border border-dashed border-gray-200 py-4 text-center text-[11px] text-gray-400">
-              暂无文档
+              {session ? "暂无文档" : "先选择一个聊天会话"}
             </p>
           ) : (
             <div className="space-y-2">
-              {(session.contents ?? []).map((item) => (
+              {(session?.contents ?? []).map((item) => (
                 <div key={item.id} className="rounded-lg border border-gray-200/80 bg-white p-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-[12px] font-medium text-gray-800">{item.title}</span>
@@ -117,29 +107,6 @@ export default function StatePanel({ sessionId, refreshKey = 0 }: StatePanelProp
                     {item.content}
                   </p>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Tools */}
-        <div>
-          <div className="mb-2 flex items-center gap-1.5">
-            <Wrench size={12} className="text-gray-400" strokeWidth={2} />
-            <span className="text-[11px] font-medium uppercase tracking-wider text-gray-400">可用工具</span>
-          </div>
-          {(session.tools ?? []).length === 0 ? (
-            <span className="text-[11px] text-gray-400">无</span>
-          ) : (
-            <div className="flex flex-wrap gap-1">
-              {(session.tools ?? []).map((t) => (
-                <span
-                  key={t.name}
-                  className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[10px] text-gray-600 ring-1 ring-gray-200"
-                  title={t.description}
-                >
-                  {t.name}
-                </span>
               ))}
             </div>
           )}

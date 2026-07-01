@@ -45,9 +45,63 @@ export interface SessionSummary {
   title: string;
 }
 
-export interface ToolInfo {
+export interface ChatFileMeta {
+  id: string;
+  filename: string;
+  file_type: string;
+  extension: string;
+  size_bytes: number;
+}
+
+export interface ConfirmationRequest {
+  request_id: string;
+  kind: "plan_review" | "risky_action" | "ambiguity_resolution";
+  stage: "analyzing" | "planned" | "executing";
+  message: string;
+  blocking: boolean;
+  options: string[];
+  details: Record<string, unknown>;
+  resume_from: string | null;
+}
+
+export interface VerificationCheck {
   name: string;
-  description: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface ExecutionActionResult {
+  action_id: string;
+  tool_name: string;
+  success: boolean;
+  output: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface TaskExecutionResult {
+  success: boolean;
+  error?: string;
+  verification?: {
+    passed: boolean;
+    checks: VerificationCheck[];
+  };
+  execution_results?: ExecutionActionResult[];
+}
+
+export interface TaskEvent {
+  task_id: string;
+  status: string;
+  plan_display?: string;
+  confirmation_request?: ConfirmationRequest | null;
+  result?: TaskExecutionResult | null;
+  message?: string | null;
+  error?: string | null;
+}
+
+export interface ChatMessageMetadata {
+  files?: ChatFileMeta[];
+  task_event?: TaskEvent;
+  response_ms?: number;
 }
 
 export interface ChatMessage {
@@ -56,9 +110,7 @@ export interface ChatMessage {
   tool_name?: string;
   tool_calls?: { name: string; arguments: any }[];
   created_at?: string;
-  metadata?: {
-    files?: Array<{id: string; filename: string; file_type: string; extension: string; size_bytes: number}>;
-  };
+  metadata?: ChatMessageMetadata;
 }
 
 export interface SessionContent {
@@ -79,7 +131,6 @@ export interface SessionDetail {
   status: string;
   model: string;
   messages: ChatMessage[];
-  tools: ToolInfo[];
   contents: SessionContent[];
   createdAt: string;
   updatedAt: string;
@@ -124,8 +175,8 @@ export function sendMessage(
   sessionId: string,
   content: string,
   fileIds: string[] = []
-): Promise<{ reply: string }> {
-  return request<{ reply: string }>(
+): Promise<{ reply: string; message?: ChatMessage }> {
+  return request<{ reply: string; message?: ChatMessage }>(
     `${API_BASE}/chat/sessions/${sessionId}/messages`,
     {
       method: "POST",
@@ -141,6 +192,7 @@ export async function uploadFile(file: File): Promise<{
   filename: string;
   file_type: string;
   extension: string;
+  file_path: string;
   size_bytes: number;
   extracted_text?: string;
 }> {
@@ -234,4 +286,23 @@ export async function* sendMessageStream(
       }
     }
   }
+}
+
+export function confirmSessionTask(
+  sessionId: string,
+  taskId: string,
+  confirmed: boolean,
+  userInput?: string
+): Promise<{ message: ChatMessage; session: SessionDetail }> {
+  return request<{ message: ChatMessage; session: SessionDetail }>(
+    `${API_BASE}/chat/sessions/${sessionId}/tasks/${taskId}/confirm`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirmed,
+        user_input: userInput,
+      }),
+    }
+  );
 }

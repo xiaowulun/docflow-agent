@@ -69,6 +69,7 @@ def _get_schema(fmt: str, ext: str) -> dict:
                         "type": "string",
                         "description": (
                             "元素路径，例如 /body/p[1]、/slide[1]/shape[1]、/Sheet1/A1。"
+                            "当 watch 预览已启动时，也可使用 selected 读取当前浏览器选中的元素。"
                         ),
                     },
                     "depth": {
@@ -244,6 +245,35 @@ OFFICECLI_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "office_command",
+            "description": (
+                "透传调用 officecli 原生命令。用于访问当前项目未提供独立 wrapper 的官方能力。"
+                "args 只传 officecli 子命令参数，不要包含 officecli 本身。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "description": '命令参数数组，例如 ["watch", "deck.pptx", "--port", "26315"]。',
+                        "items": {"type": "string"},
+                    },
+                    "expect_json": {
+                        "type": "boolean",
+                        "description": "是否期望 JSON 输出，默认 true。",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "超时时间（秒），默认 120。",
+                    },
+                },
+                "required": ["args"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "merge_document",
             "description": (
                 "使用 JSON 数据填充 Office 模板中的 {{key}} 占位符，支持 .docx/.xlsx/.pptx。"
@@ -275,7 +305,7 @@ OFFICECLI_SCHEMAS = [
         "function": {
             "name": "office_help",
             "description": (
-                "查询 officecli 的属性/命令帮助。当不确定属性名、取值格式或命令语法时使用。"
+                "查询 officecli 的属性/命令帮助。当不确定属性名、取值格式或命令语法时必须优先使用。"
             ),
             "parameters": {
                 "type": "object",
@@ -296,6 +326,149 @@ OFFICECLI_SCHEMAS = [
                     },
                 },
                 "required": ["fmt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_watch",
+            "description": "启动 Office 文档的实时预览服务，支持浏览器查看、选择、定位和后续 mark/goto。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    },
+                    "port": {
+                        "type": "integer",
+                        "description": "预览服务端口，默认 26315。",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_unwatch",
+            "description": "停止 Office 文档的实时预览服务。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    }
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_mark",
+            "description": "给 watch 预览中的元素添加内存标记，便于人工复核或后续批量修正。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "元素路径，也可传 selected 标记当前选中的元素。",
+                    },
+                    "props": {
+                        "type": "object",
+                        "description": '标记属性，如 {"color": "red", "note": "检查这里", "tofix": "tighten"}。',
+                    },
+                },
+                "required": ["file_path", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_unmark",
+            "description": "删除 watch 预览中的元素标记。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "可选，指定要删除标记的元素路径。",
+                    },
+                    "remove_all": {
+                        "type": "boolean",
+                        "description": "是否删除当前文件的全部标记。",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_get_marks",
+            "description": "列出 watch 预览中当前文件的全部标记。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    }
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_goto",
+            "description": "让 watch 预览滚动定位到指定元素。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "要定位的元素路径。",
+                    },
+                },
+                "required": ["file_path", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "office_refresh",
+            "description": "刷新派生字段，如目录页码、页码域、交叉引用等。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Office 文件路径。",
+                    }
+                },
+                "required": ["file_path"],
             },
         },
     },
@@ -559,6 +732,112 @@ OFFICECLI_SCHEMAS.extend([
     _batch_schema("docx", "docx"),
     _batch_schema("xlsx", "xlsx"),
     _batch_schema("pptx", "pptx"),
+    {
+        "type": "function",
+        "function": {
+            "name": "dump_docx",
+            "description": "将 Word 文档或子树导出为可回放的 batch 脚本。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Word 文件路径。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "要导出的子树路径，默认 /。",
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "输出格式，当前通常为 batch。",
+                    },
+                    "out": {
+                        "type": "string",
+                        "description": "可选，写入目标文件。",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dump_pptx",
+            "description": "将 PPT 文档或子树导出为可回放的 batch 脚本。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "PPT 文件路径。",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "要导出的子树路径，默认 /。",
+                    },
+                    "format": {
+                        "type": "string",
+                        "description": "输出格式，当前通常为 batch。",
+                    },
+                    "out": {
+                        "type": "string",
+                        "description": "可选，写入目标文件。",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_part_docx",
+            "description": "为 Word 文档创建新的部件，如 chart、header、footer，并返回关系 ID。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Word 文件路径。"},
+                    "parent": {"type": "string", "description": "父部件路径，例如 /。"},
+                    "part_type": {"type": "string", "description": "部件类型，如 chart、header、footer。"},
+                },
+                "required": ["file_path", "parent", "part_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_part_xlsx",
+            "description": "为 Excel 工作簿创建新的部件，如 chart，并返回关系 ID。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "Excel 文件路径。"},
+                    "parent": {"type": "string", "description": "父部件路径，例如 /Sheet1。"},
+                    "part_type": {"type": "string", "description": "部件类型，如 chart。"},
+                },
+                "required": ["file_path", "parent", "part_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_part_pptx",
+            "description": "为 PPT 演示文稿创建新的部件，如 chart，并返回关系 ID。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "description": "PPT 文件路径。"},
+                    "parent": {"type": "string", "description": "父部件路径，例如 /slide[0]。"},
+                    "part_type": {"type": "string", "description": "部件类型，如 chart。"},
+                },
+                "required": ["file_path", "parent", "part_type"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

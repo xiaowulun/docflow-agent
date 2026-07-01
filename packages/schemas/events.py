@@ -5,13 +5,13 @@
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
-class EventType(str, Enum):
+class EventType(StrEnum):
     """事件类型"""
 
     TASK_CREATED = "task_created"
@@ -21,6 +21,7 @@ class EventType(str, Enum):
     PLAN_GENERATED = "plan_generated"
     CONFIRMATION_REQUESTED = "confirmation_requested"
     CONFIRMATION_GIVEN = "confirmation_given"
+    CONFIRMATION_REJECTED = "confirmation_rejected"
     EXECUTION_STARTED = "execution_started"
     ACTION_EXECUTED = "action_executed"
     EXECUTION_DONE = "execution_done"

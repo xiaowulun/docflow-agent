@@ -1,13 +1,31 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronRight, Paperclip, X, FileText, Image, Copy, Edit2 } from "lucide-react";
 import {
+  AlertTriangle,
+  ArrowUp,
+  CheckCircle2,
+  ChevronRight,
+  Copy,
+  Edit2,
+  FileText,
+  Image,
+  Paperclip,
+  ShieldAlert,
+  Sparkles,
+  X,
+} from "lucide-react";
+import {
+  confirmSessionTask,
   getSession,
   sendMessageStream,
   uploadFile,
-  type SessionDetail,
+  type ChatFileMeta,
   type ChatMessage,
+  type ConfirmationRequest,
+  type SessionDetail,
+  type TaskEvent,
+  type TaskExecutionResult,
 } from "@/lib/chatApi";
 import Astronaut from "@/components/Astronaut";
 
@@ -16,41 +34,81 @@ interface ChatWindowProps {
   onMessageSent?: () => void;
 }
 
-/** 待发送的文件 */
-interface PendingFile {
-  id: string;
-  filename: string;
-  file_type: string;
-  extension: string;
-  size_bytes: number;
+interface PendingFile extends ChatFileMeta {
+  file_path: string;
 }
 
-/**
- * 按"轮次"分组消息：每条用户消息 + 后续所有 assistant/tool 消息为一组
- */
 type Turn = {
   user: ChatMessage;
   thinking: ChatMessage[];
   reply: ChatMessage | null;
 };
 
+const TASK_STATUS_META: Record<string, { label: string; tone: string }> = {
+  created: { label: "已创建", tone: "bg-slate-100 text-slate-700" },
+  analyzing: { label: "分析中", tone: "bg-sky-100 text-sky-700" },
+  planned: { label: "已规划", tone: "bg-indigo-100 text-indigo-700" },
+  awaiting_confirm: { label: "等待确认", tone: "bg-amber-100 text-amber-700" },
+  executing: { label: "执行中", tone: "bg-violet-100 text-violet-700" },
+  verifying: { label: "校验中", tone: "bg-cyan-100 text-cyan-700" },
+  done: { label: "已完成", tone: "bg-emerald-100 text-emerald-700" },
+  failed: { label: "失败", tone: "bg-rose-100 text-rose-700" },
+  rejected: { label: "已拒绝", tone: "bg-rose-100 text-rose-700" },
+};
+
+const CONFIRM_KIND_META: Record<
+  ConfirmationRequest["kind"],
+  { title: string; summary: string; icon: typeof ShieldAlert; tone: string }
+> = {
+  plan_review: {
+    title: "计划审阅",
+    summary: "确认后开始执行这个文档任务。",
+    icon: Sparkles,
+    tone: "border-indigo-200 bg-indigo-50 text-indigo-700",
+  },
+  risky_action: {
+    title: "高风险操作",
+    summary: "这一步会改写文档内容，需要显式授权。",
+    icon: ShieldAlert,
+    tone: "border-rose-200 bg-rose-50 text-rose-700",
+  },
+  ambiguity_resolution: {
+    title: "歧义消解",
+    summary: "直接在下方输入框补充说明，再发送即可继续当前任务。",
+    icon: AlertTriangle,
+    tone: "border-amber-200 bg-amber-50 text-amber-700",
+  },
+};
+
+const ACCEPTED_TYPES = [
+  ".png,.jpg,.jpeg,.gif,.webp,.bmp",
+  ".txt,.md,.csv,.json,.xml,.html,.htm",
+  ".docx,.doc,.xlsx,.xls,.pdf,.pptx,.ppt",
+].join(",");
+
 function groupMessages(messages: ChatMessage[]): Turn[] {
   const turns: Turn[] = [];
   let current: Turn | null = null;
 
-  for (const m of messages) {
-    if (m.role === "user") {
-      current = { user: m, thinking: [], reply: null };
+  for (const message of messages) {
+    if (message.role === "user") {
+      current = { user: message, thinking: [], reply: null };
       turns.push(current);
-    } else if (current) {
-      if (m.role === "tool") {
-        current.thinking.push(m);
-      } else if (m.role === "assistant") {
-        if (m.tool_calls && m.tool_calls.length > 0) {
-          current.thinking.push(m);
-        } else {
-          current.reply = m;
-        }
+      continue;
+    }
+
+    if (!current) continue;
+
+    if (message.role === "tool") {
+      current.thinking.push(message);
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        current.thinking.push(message);
+      } else {
+        current.reply = message;
       }
     }
   }
@@ -58,7 +116,19 @@ function groupMessages(messages: ChatMessage[]): Turn[] {
   return turns;
 }
 
-/** 格式化耗时为 "X秒" 或 "X分Y秒" */
+function getActiveAmbiguityTask(messages: ChatMessage[]): TaskEvent | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const taskEvent = messages[index].metadata?.task_event;
+    if (
+      taskEvent?.status === "awaiting_confirm" &&
+      taskEvent.confirmation_request?.kind === "ambiguity_resolution"
+    ) {
+      return taskEvent;
+    }
+  }
+  return null;
+}
+
 function formatDuration(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
   if (totalSec < 60) return `${totalSec}秒`;
@@ -67,20 +137,22 @@ function formatDuration(ms: number): string {
   return `${min}分${sec}秒`;
 }
 
-/** 格式化文件大小 */
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-const ACCEPTED_TYPES = [
-  // 图片
-  ".png,.jpg,.jpeg,.gif,.webp,.bmp",
-  // 文档
-  ".txt,.md,.csv,.json,.xml,.html,.htm",
-  ".docx,.doc,.xlsx,.xls,.pdf,.pptx,.ppt",
-].join(",");
+function buildAssistantCopyText(content: string, durationMs?: number, extra?: string): string {
+  const parts = [content.trim()];
+  if (extra?.trim()) {
+    parts.push(extra.trim());
+  }
+  if (durationMs != null) {
+    parts.push(`耗时：${formatDuration(durationMs)}`);
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
 
 export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps) {
   const [session, setSession] = useState<SessionDetail | null>(null);
@@ -96,6 +168,8 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const activeAmbiguityTask = getActiveAmbiguityTask(session?.messages ?? []);
 
   const startThinkingTimer = () => {
     thinkingStartRef.current = Date.now();
@@ -135,14 +209,14 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
   }, [session?.messages, sending, streamingContent]);
 
   useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 200) + "px";
+    const element = textareaRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
   }, [input]);
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
     if (!files || files.length === 0) return;
 
     setUploading(true);
@@ -156,31 +230,34 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
             filename: result.filename,
             file_type: result.file_type,
             extension: result.extension,
+            file_path: result.file_path,
             size_bytes: result.size_bytes,
           },
         ]);
       }
-    } catch (e: any) {
-      alert(e.message || "文件上传失败");
+    } catch (error: any) {
+      alert(error.message || "文件上传失败");
     } finally {
       setUploading(false);
-      // 清空 input 以允许重复选择同一文件
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
   const removePendingFile = (id: string) => {
-    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+    setPendingFiles((prev) => prev.filter((file) => file.id !== id));
   };
 
   const handleSend = async () => {
     const text = input.trim();
     if ((!text && pendingFiles.length === 0) || !sessionId || sending) return;
 
-    const fileIds = pendingFiles.map((f) => f.id);
-    const fileInfos = pendingFiles.map((f) => ({
-      id: f.id, filename: f.filename, file_type: f.file_type,
-      extension: f.extension, size_bytes: f.size_bytes,
+    const fileIds = pendingFiles.map((file) => file.id);
+    const fileInfos = pendingFiles.map((file) => ({
+      id: file.id,
+      filename: file.filename,
+      file_type: file.file_type,
+      extension: file.extension,
+      size_bytes: file.size_bytes,
     }));
 
     setInput("");
@@ -197,14 +274,15 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
       created_at: new Date().toISOString(),
     };
     setSession((prev) =>
-      prev
-        ? { ...prev, messages: [...prev.messages, optimistic], status: "thinking" }
-        : prev
+      prev ? { ...prev, messages: [...prev.messages, optimistic], status: "thinking" } : prev
     );
 
     try {
       let accumulated = "";
-      for await (const event of sendMessageStream(sessionId, text || "请查看我上传的文件", fileIds)) {
+      const fallbackPrompt =
+        pendingFiles.length > 0 ? "请查看我上传的文件" : text;
+
+      for await (const event of sendMessageStream(sessionId, text || fallbackPrompt, fileIds)) {
         if (event.type === "text") {
           accumulated += event.content;
           setStreamingContent(accumulated);
@@ -219,10 +297,10 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
           throw new Error(event.message);
         }
       }
-    } catch (e: any) {
+    } catch (error: any) {
       stopThinkingTimer();
       setSession((prev) => (prev ? { ...prev, status: "error" } : prev));
-      alert(e.message || "发送失败");
+      alert(error.message || "发送失败");
       refresh();
     } finally {
       stopThinkingTimer();
@@ -232,9 +310,32 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
+  const handleTaskDecision = async (taskId: string, confirmed: boolean) => {
+    if (!sessionId || sending) return;
+
+    setSending(true);
+    setStreamingTools([]);
+    setStreamingContent(confirmed ? "正在继续处理文档任务..." : "正在停止当前文档任务...");
+    startThinkingTimer();
+
+    try {
+      await confirmSessionTask(sessionId, taskId, confirmed);
+      refresh();
+      onMessageSent?.();
+    } catch (error: any) {
+      alert(error.message || "任务处理失败");
+      refresh();
+    } finally {
+      stopThinkingTimer();
+      setSending(false);
+      setStreamingContent("");
+      setStreamingTools([]);
+    }
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
       handleSend();
     }
   };
@@ -246,9 +347,13 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
     textareaRef.current?.focus();
   };
 
+  function handleSendQuick(text: string) {
+    setInput(text);
+    setTimeout(() => handleSend(), 50);
+  }
+
   return (
     <div className="flex flex-1 flex-col bg-white">
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto">
         {!session ? (
           <EmptyState />
@@ -256,13 +361,18 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
           <WelcomeScreen onSend={handleSendQuick} />
         ) : (
           <div className="mx-auto w-full max-w-3xl px-8 pb-4 pt-2">
-            {turns.map((turn, ti) => (
-              <TurnView key={ti} turn={turn} onEdit={handleEditMessage} />
+            {turns.map((turn, index) => (
+              <TurnView
+                key={`turn-${index}-${turn.user.created_at ?? index}`}
+                turn={turn}
+                onEdit={handleEditMessage}
+                onTaskDecision={handleTaskDecision}
+              />
             ))}
             {sending && (
               <div>
                 {streamingTools.length > 0 && (
-                  <div className="ml-11 mb-2">
+                  <div className="mb-2 ml-11">
                     <div className="flex items-center gap-1.5 text-xs text-gray-400">
                       <ChevronRight size={12} className="rotate-90" strokeWidth={2} />
                       思考过程
@@ -271,9 +381,9 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
                       </span>
                     </div>
                     <div className="mt-1 space-y-0.5">
-                      {streamingTools.map((name, i) => (
+                      {streamingTools.map((name, index) => (
                         <div
-                          key={i}
+                          key={`${name}-${index}`}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-500 ring-1 ring-gray-200/60"
                         >
                           <FileText size={11} className="text-gray-400" strokeWidth={2} />
@@ -312,27 +422,25 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
         )}
       </div>
 
-      {/* Input */}
       <div className="px-4 pb-4 pt-2">
         <div className="mx-auto w-full max-w-3xl">
-          {/* 待发送文件预览 */}
           {pendingFiles.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-2">
-              {pendingFiles.map((f) => (
+              {pendingFiles.map((file) => (
                 <div
-                  key={f.id}
+                  key={file.id}
                   className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs"
                 >
-                  {f.file_type === "image" ? (
+                  {file.file_type === "image" ? (
                     <Image size={13} className="text-blue-500" strokeWidth={2} />
                   ) : (
                     <FileText size={13} className="text-gray-500" strokeWidth={2} />
                   )}
-                  <span className="max-w-[120px] truncate text-gray-700">{f.filename}</span>
-                  <span className="text-gray-400">{formatFileSize(f.size_bytes)}</span>
+                  <span className="max-w-[120px] truncate text-gray-700">{file.filename}</span>
+                  <span className="text-gray-400">{formatFileSize(file.size_bytes)}</span>
                   {!sending && (
                     <button
-                      onClick={() => removePendingFile(f.id)}
+                      onClick={() => removePendingFile(file.id)}
                       className="ml-1 text-gray-400 hover:text-red-500"
                     >
                       <X size={12} strokeWidth={2} />
@@ -344,7 +452,6 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
           )}
 
           <div className="flex items-end gap-2 rounded-3xl border border-gray-200 bg-white px-4 py-3 shadow-sm transition focus-within:border-gray-300 focus-within:shadow-md">
-            {/* 上传按钮 */}
             <input
               ref={fileInputRef}
               type="file"
@@ -369,14 +476,16 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               disabled={!sessionId || sending}
               placeholder={
                 sessionId
-                  ? pendingFiles.length > 0
-                    ? "添加说明（可选），按 Enter 发送"
-                    : "给 DocFlow 发送消息"
+                  ? activeAmbiguityTask
+                    ? "补充文档要求，按 Enter 继续当前任务"
+                    : pendingFiles.length > 0
+                      ? "直接描述你的处理需求，按 Enter 发送"
+                      : "给 DocFlow 发送消息"
                   : "请先选择或新建会话"
               }
               rows={1}
@@ -397,49 +506,63 @@ export default function ChatWindow({ sessionId, onMessageSent }: ChatWindowProps
       </div>
     </div>
   );
-
-  function handleSendQuick(text: string) {
-    setInput(text);
-    setTimeout(() => handleSend(), 50);
-  }
 }
 
-/** 渲染一轮对话 */
-function TurnView({ turn, onEdit }: { turn: Turn; onEdit?: (content: string) => void }) {
+function TurnView({
+  turn,
+  onEdit,
+  onTaskDecision,
+}: {
+  turn: Turn;
+  onEdit?: (content: string) => void;
+  onTaskDecision: (taskId: string, confirmed: boolean) => void;
+}) {
   const [showThinking, setShowThinking] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"user" | "assistant" | null>(null);
   const hasThinking = turn.thinking.length > 0;
+  const taskEvent = turn.reply?.metadata?.task_event;
+  const responseMs = turn.reply?.metadata?.response_ms;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(turn.user.content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopied("user");
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const handleCopyAssistant = () => {
+    if (!turn.reply) return;
+
+    const extra =
+      taskEvent?.plan_display || taskEvent?.message || taskEvent?.error || undefined;
+    navigator.clipboard.writeText(
+      buildAssistantCopyText(turn.reply.content, responseMs, extra)
+    );
+    setCopied("assistant");
+    setTimeout(() => setCopied(null), 2000);
   };
 
   const handleEdit = () => {
-    if (onEdit) {
-      onEdit(turn.user.content);
-    }
+    if (onEdit) onEdit(turn.user.content);
   };
 
   return (
     <div className="animate-fade-in">
-      <UserBubble 
-        content={turn.user.content} 
+      <UserBubble
+        content={turn.user.content}
         files={turn.user.metadata?.files}
-        onCopy={handleCopy}
-        onEdit={handleEdit}
+        onCopy={turn.user.content ? handleCopy : undefined}
+        onEdit={turn.user.content ? handleEdit : undefined}
       />
       {copied && (
-        <div className="fixed top-4 right-4 z-50 rounded-lg bg-gray-800 px-4 py-2 text-sm text-white shadow-lg">
-          已复制到剪贴板
+        <div className="fixed right-4 top-4 z-50 rounded-lg bg-gray-800 px-4 py-2 text-sm text-white shadow-lg">
+          {copied === "assistant" ? "已复制 AI 回答" : "已复制到剪贴板"}
         </div>
       )}
 
       {hasThinking && (
-        <div className="ml-11 mb-2">
+        <div className="mb-2 ml-11">
           <button
-            onClick={() => setShowThinking((v) => !v)}
+            onClick={() => setShowThinking((value) => !value)}
             className="flex items-center gap-1.5 text-xs text-gray-400 transition hover:text-gray-600"
           >
             <ChevronRight
@@ -449,34 +572,34 @@ function TurnView({ turn, onEdit }: { turn: Turn; onEdit?: (content: string) => 
             />
             思考过程
             <span className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500">
-              {turn.thinking.filter((m) => m.role === "assistant").length} 次工具调用
+              {turn.thinking.filter((message) => message.role === "assistant").length} 次工具调用
             </span>
           </button>
           {showThinking && (
             <div className="mt-1 space-y-1">
-              {turn.thinking.map((m, i) => {
-                if (m.role === "assistant" && m.tool_calls) {
+              {turn.thinking.map((message, index) => {
+                if (message.role === "assistant" && message.tool_calls) {
                   return (
-                    <div key={i} className="space-y-0.5">
-                      {m.tool_calls.map((tc, j) => (
+                    <div key={index} className="space-y-0.5">
+                      {message.tool_calls.map((toolCall, toolIndex) => (
                         <div
-                          key={j}
+                          key={`${toolCall.name}-${toolIndex}`}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5 text-xs text-gray-500 ring-1 ring-gray-200/60"
                         >
                           <FileText size={11} className="text-gray-400" strokeWidth={2} />
-                          <span className="font-medium text-gray-600">{tc.name}</span>
+                          <span className="font-medium text-gray-600">{toolCall.name}</span>
                         </div>
                       ))}
                     </div>
                   );
                 }
-                if (m.role === "tool") {
+                if (message.role === "tool") {
                   return (
                     <pre
-                      key={i}
+                      key={index}
                       className="max-h-40 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs leading-relaxed text-gray-500 ring-1 ring-gray-100"
                     >
-                      {m.content}
+                      {message.content}
                     </pre>
                   );
                 }
@@ -487,40 +610,59 @@ function TurnView({ turn, onEdit }: { turn: Turn; onEdit?: (content: string) => 
         </div>
       )}
 
-      {turn.reply && <AssistantBubble content={turn.reply.content} />}
+      {turn.reply &&
+        (taskEvent ? (
+          <TaskAssistantBubble
+            content={turn.reply.content}
+            task={taskEvent}
+            durationMs={responseMs}
+            onConfirm={() => onTaskDecision(taskEvent.task_id, true)}
+            onReject={() => onTaskDecision(taskEvent.task_id, false)}
+            onCopy={handleCopyAssistant}
+          />
+        ) : (
+          <AssistantBubble
+            content={turn.reply.content}
+            durationMs={responseMs}
+            onCopy={handleCopyAssistant}
+          />
+        ))}
     </div>
   );
 }
 
-function UserBubble({ content, files, onCopy, onEdit }: { 
-  content: string; 
-  files?: Array<{id: string; filename: string; file_type: string; extension: string; size_bytes: number}>;
-  onCopy?: () => void; 
-  onEdit?: () => void 
+function UserBubble({
+  content,
+  files,
+  onCopy,
+  onEdit,
+}: {
+  content: string;
+  files?: ChatFileMeta[];
+  onCopy?: () => void;
+  onEdit?: () => void;
 }) {
   return (
     <div className="group flex items-start justify-end gap-3 py-3">
       <div className="relative max-w-[78%]">
-        {/* 文件附件卡片 */}
         {files && files.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
-            {files.map((f) => (
+            {files.map((file) => (
               <div
-                key={f.id}
+                key={file.id}
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs"
               >
-                {f.file_type === "image" ? (
+                {file.file_type === "image" ? (
                   <Image size={13} className="text-blue-500" strokeWidth={2} />
                 ) : (
                   <FileText size={13} className="text-gray-500" strokeWidth={2} />
                 )}
-                <span className="max-w-[120px] truncate text-gray-700">{f.filename}</span>
-                <span className="text-gray-400">{formatFileSize(f.size_bytes)}</span>
+                <span className="max-w-[120px] truncate text-gray-700">{file.filename}</span>
+                <span className="text-gray-400">{formatFileSize(file.size_bytes)}</span>
               </div>
             ))}
           </div>
         )}
-        {/* 用户文字内容 */}
         {content && (
           <div className="rounded-2xl rounded-tr-sm bg-gray-100 px-4 py-3 text-[14px] leading-relaxed text-gray-900">
             {content}
@@ -557,18 +699,205 @@ function UserBubble({ content, files, onCopy, onEdit }: {
   );
 }
 
-function AssistantBubble({ content }: { content: string }) {
+function AssistantBubble({
+  content,
+  durationMs,
+  onCopy,
+}: {
+  content: string;
+  durationMs?: number;
+  onCopy?: () => void;
+}) {
   return (
-    <div className="flex items-start gap-3 py-3">
+    <div className="group flex items-start gap-3 py-3">
       <div className="mt-0.5 flex-shrink-0">
         <Astronaut size={32} />
       </div>
       <div className="flex min-w-0 flex-1 flex-col items-start gap-1.5">
-        <span className="text-[11px] font-semibold text-gray-500">DocFlow</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-gray-500">DocFlow</span>
+          {durationMs != null && (
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
+              {formatDuration(durationMs)}
+            </span>
+          )}
+        </div>
         <div className="max-w-full whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-emerald-50 px-4 py-3 text-[14px] leading-relaxed text-gray-800">
           {content || "（无内容）"}
         </div>
+        {onCopy && (
+          <button
+            onClick={onCopy}
+            className="rounded p-1 text-gray-400 opacity-0 transition hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100"
+            title="复制回答"
+          >
+            <Copy size={14} />
+          </button>
+        )}
       </div>
+    </div>
+  );
+}
+
+function TaskAssistantBubble({
+  content,
+  task,
+  durationMs,
+  onConfirm,
+  onReject,
+  onCopy,
+}: {
+  content: string;
+  task: TaskEvent;
+  durationMs?: number;
+  onConfirm: () => void;
+  onReject: () => void;
+  onCopy?: () => void;
+}) {
+  const statusMeta = TASK_STATUS_META[task.status] ?? TASK_STATUS_META.created;
+  const confirmMeta = task.confirmation_request
+    ? CONFIRM_KIND_META[task.confirmation_request.kind]
+    : null;
+  const ConfirmIcon = confirmMeta?.icon;
+
+  return (
+    <div className="group flex items-start gap-3 py-3">
+      <div className="mt-0.5 flex-shrink-0">
+        <Astronaut size={32} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold text-gray-500">DocFlow</span>
+          {durationMs != null && (
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-[10px] text-emerald-600">
+              {formatDuration(durationMs)}
+            </span>
+          )}
+          <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${statusMeta.tone}`}>
+            {statusMeta.label}
+          </span>
+        </div>
+
+        <div className="w-full rounded-2xl rounded-tl-sm bg-emerald-50 px-4 py-3 text-[14px] leading-relaxed text-gray-800">
+          <p className="font-medium text-gray-900">{content}</p>
+          {task.plan_display && (
+            <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-gray-700">
+              {task.plan_display}
+            </pre>
+          )}
+        </div>
+
+        {confirmMeta && ConfirmIcon ? (
+          <div className={`w-full rounded-2xl border px-4 py-3 ${confirmMeta.tone}`}>
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-white/70 p-2">
+                <ConfirmIcon size={16} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[13px] font-semibold">{confirmMeta.title}</p>
+                  <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] uppercase">
+                    {task.confirmation_request?.stage}
+                  </span>
+                </div>
+                <p className="mt-1 text-[12px] leading-relaxed">
+                  {task.confirmation_request?.message}
+                </p>
+                <p className="mt-2 text-[11px] opacity-80">{confirmMeta.summary}</p>
+                {Object.keys(task.confirmation_request?.details ?? {}).length > 0 && (
+                  <pre className="mt-3 whitespace-pre-wrap break-words rounded-xl bg-white/60 p-3 text-[11px] text-current">
+                    {JSON.stringify(task.confirmation_request?.details ?? {}, null, 2)}
+                  </pre>
+                )}
+                {task.confirmation_request?.kind !== "ambiguity_resolution" && (
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={onConfirm}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[12px] font-medium text-gray-900 ring-1 ring-black/10 transition hover:bg-gray-50"
+                    >
+                      <CheckCircle2 size={13} />
+                      确认执行
+                    </button>
+                    <button
+                      onClick={onReject}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-white/70 px-3 py-2 text-[12px] font-medium ring-1 ring-black/10 transition hover:bg-white"
+                    >
+                      <X size={13} />
+                      拒绝
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {task.message && (
+          <div className="w-full rounded-xl bg-gray-100 px-3 py-2 text-[12px] text-gray-600">
+            {task.message}
+          </div>
+        )}
+
+        {task.error && (
+          <div className="w-full rounded-xl bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+            {task.error}
+          </div>
+        )}
+
+        {task.result && <TaskResultPanel result={task.result} />}
+
+        {onCopy && (
+          <button
+            onClick={onCopy}
+            className="rounded p-1 text-gray-400 opacity-0 transition hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100"
+            title="复制回答"
+          >
+            <Copy size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TaskResultPanel({ result }: { result: TaskExecutionResult }) {
+  return (
+    <div className="w-full rounded-xl border border-gray-200 bg-white px-3 py-3">
+      <div className="flex items-center gap-2 text-[12px] font-medium">
+        {result.success ? (
+          <>
+            <CheckCircle2 size={14} className="text-emerald-600" />
+            <span className="text-emerald-700">执行与校验通过</span>
+          </>
+        ) : (
+          <>
+            <AlertTriangle size={14} className="text-amber-600" />
+            <span className="text-amber-700">执行失败或仍需处理</span>
+          </>
+        )}
+      </div>
+      {result.error && (
+        <p className="mt-2 text-[12px] leading-relaxed text-rose-700">{result.error}</p>
+      )}
+      {result.verification?.checks && result.verification.checks.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {result.verification.checks.map((check, index) => (
+            <div key={`${check.name}-${index}`} className="rounded-lg bg-gray-50 px-3 py-2 text-[11px]">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`rounded-full px-1.5 py-0.5 ${
+                    check.passed ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                  }`}
+                >
+                  {check.passed ? "通过" : "未通过"}
+                </span>
+                <span className="font-medium text-gray-700">{check.name}</span>
+              </div>
+              <p className="mt-1 text-gray-500">{check.detail}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -580,21 +909,22 @@ function WelcomeScreen({ onSend }: { onSend: (text: string) => void }) {
     { icon: "📋", text: "列一份工作计划", sub: "按优先级排序" },
     { icon: "💡", text: "给我一些创意灵感", sub: "激发写作思路" },
   ];
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-8">
       <Astronaut size={64} />
       <h1 className="mt-5 text-2xl font-semibold text-gray-800">有什么可以帮你的？</h1>
       <div className="mt-8 grid w-full max-w-2xl grid-cols-2 gap-3">
-        {suggestions.map((s, i) => (
+        {suggestions.map((suggestion, index) => (
           <button
-            key={i}
-            onClick={() => onSend(s.text)}
+            key={index}
+            onClick={() => onSend(suggestion.text)}
             className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-left transition hover:bg-gray-50"
           >
-            <span className="mt-0.5 text-xl">{s.icon}</span>
+            <span className="mt-0.5 text-xl">{suggestion.icon}</span>
             <div>
-              <p className="text-[13px] font-medium text-gray-800">{s.text}</p>
-              <p className="mt-0.5 text-[12px] text-gray-400">{s.sub}</p>
+              <p className="text-[13px] font-medium text-gray-800">{suggestion.text}</p>
+              <p className="mt-0.5 text-[12px] text-gray-400">{suggestion.sub}</p>
             </div>
           </button>
         ))}

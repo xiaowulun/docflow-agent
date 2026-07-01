@@ -50,6 +50,7 @@ async def upload_file(file: UploadFile):
         "filename": record.original_name,
         "file_type": record.file_type,
         "extension": record.extension,
+        "file_path": record.file_path,
         "size_bytes": record.size_bytes,
         "extracted_text": record.extracted_text,
     }
